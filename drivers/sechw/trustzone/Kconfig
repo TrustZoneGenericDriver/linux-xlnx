@@ -1,0 +1,25 @@
+#
+# Copyright (C) 2014 Javier González
+#
+# TrustZone device configuration
+#
+
+menuconfig ARM_TRUSTZONE
+	tristate "TrustZone Support"
+	# depends on HAS_IOMEM //XXX: We need to look into this
+	# XXX: Can we make it depend on ARM compatible processors?
+	# XXX: We need to look at the dependencies with TIM
+	select SECURITYFS
+	---help---
+	If you have an ARM processor that is compatible with TrustZone and were
+	the TrustZone security extensions are anabled say Yes to get support
+	from within the Linux kernel. If unsure, say N.
+	# TODO: We need to specify what are the dependencies.
+
+if ARM_TRUSTZONE
+config TRUSTZONE_SIERRAWARE
+	tristate "Sierraware TrustZone Interface"
+	---help---
+	If you use Sierraware's SierraTEE or OpenVirtualization say Yes to get
+	TrustZone support from within the Linux kernel.
+endif # ARM_TRUSTZONE
