@@ -157,10 +157,14 @@
 #define XSLCR_MDIO_PIN_0		52
 #define XSLCR_MIO_MAX_PIN		54
 
-#define xslcr_writereg(offset, val)	__raw_writel(val, offset)
-#define xslcr_readreg(offset)		__raw_readl(offset)
+/* #define xslcr_writereg(offset, val)	__raw_writel(val, offset) */
+/* #define xslcr_readreg(offset)		__raw_readl(offset) */
 
-void __iomem *zynq_slcr_base;
+void __iomem	*zynq_slcr_base;
+void		*zynq_slcr_virt_base;
+
+extern uint32_t secure_read(void *);
+extern void secure_write(uint32_t, void *);
 
 /**
  * struct xslcr - slcr device data.
@@ -169,7 +173,10 @@ void __iomem *zynq_slcr_base;
  *
  */
 struct xslcr {
-	void __iomem	*regs;
+	void		*phys_regs;
+	void __iomem	*virt_regs;
+	void __iomem	*regs; /* TODO: Not necessarily __iomem */
+	u8		map_world;
 	spinlock_t	io_lock;
 };
 
@@ -1591,6 +1598,38 @@ static const struct xslcr_periph_reset reset_info[] = {
 	{ XSLCR_FPGA_RST_CTRL_OFFSET, 0x01000000 },
 };
 
+/*
+ * TODO: Generalize this in the TrustZone driver so that each
+ * target implements this operation. This is done to support
+ * architectures where virtual addresses are not aligned. This shoud be
+ * accessible to any target supporting TrustZone.
+ */
+static u32 xslcr_readreg(const volatile void __iomem *addr)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (slcr->map_world == 0) {
+		/* TrustZone's normal world */
+		return __raw_readl(addr);
+	} else
+		return secure_read(addr);
+}
+
+static void xslcr_writereg(volatile void __iomem *addr, u32 val)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (slcr->map_world == 0) {
+		/* TrustZone's normal world */
+		__raw_writel(val, addr);
+	} else
+		secure_write(val, addr);
+}
+
 /**
  * xslcr_system_reset - Reset the entire system.
  *
@@ -2477,6 +2516,8 @@ module_init(xslcr_arch_init);
 int __init xslcr_init(void)
 {
 	struct device_node *np;
+	void *ptr;
+	struct resource res;
 
 	np = of_find_compatible_node(NULL, NULL, "xlnx,zynq-slcr");
 	if (!np) {
@@ -2490,14 +2531,39 @@ int __init xslcr_init(void)
 				__func__);
 		BUG();
 	}
+	
+	if (of_address_to_resource(np, 0, &res)) {
+		pr_err("%s: Unable to retrieve physical addresses\n, __func__");
+		BUG();
+	}
+	slcr->phys_regs = res.start;
 
-	slcr->regs = of_iomap(np, 0);
-	if (!slcr->regs) {
+	slcr->virt_regs = ioremap(res.start, resource_size(&res));
+	if (!slcr->virt_regs) {
 		pr_err("%s: Unable to map I/O memory\n", __func__);
 		BUG();
 	}
-
+	
+	ptr = of_get_property(np, "arm-world", NULL);
+	if (!ptr) {
+		pr_info("%s: No world specified for TrustZone configuration "
+				"mapping device to 'normal world' as default\n",
+				DRIVER_NAME);
+		slcr->map_world = 0; /* map to normal world by default */
+		slcr->regs = slcr->virt_regs;
+	} else {
+		slcr->map_world = be32_to_cpup(ptr);
+		if (slcr->map_world == 0)
+			slcr->regs = slcr->virt_regs;
+		else if (slcr->map_world == 1)
+			slcr->regs = slcr->phys_regs;
+		else {
+			pr_err("%s: Bad 'world' in device tree\n", __func__);
+			BUG();
+		}
+	}
 	zynq_slcr_base = slcr->regs;
+	zynq_slcr_virt_base = slcr->virt_regs;
 
 	/* init periph_status based on the data from MIO control registers */
 	xslcr_get_mio_status();
@@ -2505,9 +2571,12 @@ int __init xslcr_init(void)
 	/* unlock the SLCR so that registers can be changed */
 	xslcr_writereg(slcr->regs + XSLCR_UNLOCK, 0xDF0D);
 
-	pr_info("%s mapped to %p\n", DRIVER_NAME, slcr->regs);
+	pr_info("%s physical address: %p\n", DRIVER_NAME, slcr->phys_regs);
+	pr_info("%s virtual address: %p\n", DRIVER_NAME, slcr->virt_regs);
+	pr_info("%s mapped to: %p\n", DRIVER_NAME, slcr->regs);
+	pr_info("%s world: %d\n", DRIVER_NAME, slcr->map_world);
 
-	zynq_clock_init(slcr->regs);
+	zynq_clock_init(slcr->virt_regs, slcr->phys_regs, slcr->map_world);
 
 	of_node_put(np);
 

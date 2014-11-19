@@ -112,9 +112,52 @@
 /* Device Id in the private structure */
 #define XILINX_DMA_DEVICE_ID_SHIFT	28
 
+extern uint32_t secure_read(void *);
+extern void secure_write(uint32_t, void *);
+
+static u8 dma_map_world;
+
+/*
+ * TODO: Generalize this in the TrustZone driver so that each
+ * target implements this operation. This is done to support
+ * architectures where virtual addresses are not aligned. This shoud be
+ * accessible to any target supporting TrustZone.
+ */
+u32 dma_readreg(const volatile void __iomem *addr)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (dma_map_world == 0) {
+		/* TrustZone's normal world */
+		pr_info("Normal read dma\n");
+		return ioread32(addr);
+	} else {
+		pr_info("Secure read dma\n");
+		return secure_read(addr);
+	}
+}
+
+void dma_writereg(volatile void __iomem *addr, u32 val)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (dma_map_world == 0) {
+		/* TrustZone's normal world */
+		pr_info("Normal write dma\n");
+		iowrite32(val, addr);
+	} else {
+		pr_info("Secure write dma\n");
+		secure_write(val, addr);
+	}
+}
+
 /* IO accessors */
-#define DMA_OUT(addr, val)	(iowrite32(val, addr))
-#define DMA_IN(addr)		(ioread32(addr))
+#define DMA_OUT(addr, val)	(dma_writereg(addr, val))
+#define DMA_IN(addr)		(dma_readreg(addr))
 
 #ifdef CONFIG_XILINX_DMATEST
 #define TEST_DMA_WITH_LOOPBACK
@@ -1081,8 +1124,9 @@ static int xilinx_dma_of_probe(struct platform_device *op)
 	struct device_node *child, *node;
 	int err;
 	const __be32 *value;
+	void *ptr;
 
-	dev_info(&op->dev, "Probing xilinx axi dma engine\n");
+	pr_info("Probing xilinx axi dma engine\n");
 
 	xdev = kzalloc(sizeof(struct xilinx_dma_device), GFP_KERNEL);
 	if (!xdev) {
@@ -1105,11 +1149,29 @@ static int xilinx_dma_of_probe(struct platform_device *op)
 		goto out_free_xdev;
 	}
 
+	/* TrustZone world to which device is mapped */
+	/* TODO: Complete to support physical address space for secure world 
+	 * use
+	 */
+	ptr = of_get_property(node, "arm-world", NULL);
+	if (!ptr) {
+		pr_info("No world specified for TrustZone configuration "
+			"mapping device to 'normal world' as default\n");
+		dma_map_world = 0; /* map to normal world by default */
+	} else {
+		dma_map_world = be32_to_cpup(ptr);
+		if ((dma_map_world != 0) && (dma_map_world != 1)) {
+			pr_err("%s: Bad 'world' in device tree\n", __func__);
+			BUG();
+		} else {
+			pr_info("axi-dma configured in secure world\n");
+		}
+	}
+
 	/*
 	 * Axi DMA only do slave transfers
 	 */
 	if (of_device_is_compatible(node, "xlnx,axi-dma")) {
-
 		xdev->feature |= XILINX_DMA_IP_DMA;
 		value = of_get_property(node,
 				"xlnx,sg-include-stscntrl-strm",

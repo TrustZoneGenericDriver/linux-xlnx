@@ -1556,8 +1556,7 @@ static int xdevcfg_drv_probe(struct platform_device *pdev)
 				regs_res->end - regs_res->start + 1,
 				DRIVER_NAME)) {
 		dev_err(&pdev->dev, "Couldn't lock memory region at %Lx\n",
-			(unsigned long long)regs_res->start);
-		retval = -EBUSY;
+			(unsigned long long)regs_res->start); retval = -EBUSY;
 		goto failed1;
 	}
 

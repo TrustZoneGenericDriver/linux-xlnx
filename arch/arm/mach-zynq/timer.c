@@ -76,6 +76,15 @@ struct xttcps_timer {
 	struct notifier_block clk_rate_change_nb;
 };
 
+struct xttc_timer {
+	void		*phys_regs;
+	void __iomem	*virt_regs;
+	void		*regs;
+	int		map_world;
+};
+
+static struct xttc_timer init_timer;
+
 #define to_xttcps_timer(x) \
 		container_of(x, struct xttcps_timer, clk_rate_change_nb)
 
@@ -95,6 +104,42 @@ struct xttcps_timer_clockevent {
 #define to_xttcps_timer_clkevent(x) \
 		container_of(x, struct xttcps_timer_clockevent, ce)
 
+extern uint32_t secure_read(void *);
+extern void secure_write(uint32_t, void *);
+
+/*
+ * TODO: Generalize this in the TrustZone driver so that each
+ * target implements this operation. This is done to support
+ * architectures where virtual addresses are not aligned. This shoud be
+ * accessible to any target supporting TrustZone.
+ */
+u32 xttc_readreg(const volatile void __iomem *addr)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (init_timer.map_world == 0) {
+		/* TrustZone's normal world */
+		return __raw_readl(addr);
+	} else if (init_timer.map_world == 1)
+		return secure_read(addr);
+}
+
+void xttc_writereg(u32 val, volatile void __iomem *addr)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (init_timer.map_world == 0) {
+		/* TrustZone's normal world */
+		__raw_writel(val, addr);
+	} else if (init_timer.map_world == 1) {
+		secure_write(val, addr);
+	}
+}
+
 /**
  * xttcps_set_interval - Set the timer interval value
  *
@@ -107,11 +152,11 @@ static void xttcps_set_interval(struct xttcps_timer *timer,
 	u32 ctrl_reg;
 
 	/* Disable the counter, set the counter value  and re-enable counter */
-	ctrl_reg = __raw_readl(timer->base_addr + XTTCPS_CNT_CNTRL_OFFSET);
+	ctrl_reg = xttc_readreg(timer->base_addr + XTTCPS_CNT_CNTRL_OFFSET);
 	ctrl_reg |= XTTCPS_CNT_CNTRL_DISABLE_MASK;
-	__raw_writel(ctrl_reg, timer->base_addr + XTTCPS_CNT_CNTRL_OFFSET);
+	xttc_writereg(ctrl_reg, timer->base_addr + XTTCPS_CNT_CNTRL_OFFSET);
 
-	__raw_writel(cycles, timer->base_addr + XTTCPS_INTR_VAL_OFFSET);
+	xttc_writereg(cycles, timer->base_addr + XTTCPS_INTR_VAL_OFFSET);
 
 	/*
 	 * Reset the counter (0x10) so that it starts from 0, one-shot
@@ -119,7 +164,7 @@ static void xttcps_set_interval(struct xttcps_timer *timer,
 	 */
 	ctrl_reg |= CNT_CNTRL_RESET;
 	ctrl_reg &= ~XTTCPS_CNT_CNTRL_DISABLE_MASK;
-	__raw_writel(ctrl_reg, timer->base_addr + XTTCPS_CNT_CNTRL_OFFSET);
+	xttc_writereg(ctrl_reg, timer->base_addr + XTTCPS_CNT_CNTRL_OFFSET);
 }
 
 /**
@@ -136,7 +181,7 @@ static irqreturn_t xttcps_clock_event_interrupt(int irq, void *dev_id)
 	struct xttcps_timer *timer = &xttce->xttc;
 
 	/* Acknowledge the interrupt and call event handler */
-	__raw_readl(timer->base_addr + XTTCPS_ISR_OFFSET);
+	xttc_readreg(timer->base_addr + XTTCPS_ISR_OFFSET);
 
 	xttce->ce.event_handler(&xttce->ce);
 
@@ -152,7 +197,7 @@ static cycle_t __xttc_clocksource_read(struct clocksource *cs)
 {
 	struct xttcps_timer *timer = &to_xttcps_timer_clksrc(cs)->xttc;
 
-	return (cycle_t)__raw_readl(timer->base_addr +
+	return (cycle_t)xttc_readreg(timer->base_addr +
 				XTTCPS_COUNT_VAL_OFFSET);
 }
 
@@ -196,17 +241,17 @@ static void xttcps_set_mode(enum clock_event_mode mode,
 	case CLOCK_EVT_MODE_ONESHOT:
 	case CLOCK_EVT_MODE_UNUSED:
 	case CLOCK_EVT_MODE_SHUTDOWN:
-		ctrl_reg = __raw_readl(timer->base_addr +
+		ctrl_reg = xttc_readreg(timer->base_addr +
 					XTTCPS_CNT_CNTRL_OFFSET);
 		ctrl_reg |= XTTCPS_CNT_CNTRL_DISABLE_MASK;
-		__raw_writel(ctrl_reg,
+		xttc_writereg(ctrl_reg,
 				timer->base_addr + XTTCPS_CNT_CNTRL_OFFSET);
 		break;
 	case CLOCK_EVT_MODE_RESUME:
-		ctrl_reg = __raw_readl(timer->base_addr +
+		ctrl_reg = xttc_readreg(timer->base_addr +
 					XTTCPS_CNT_CNTRL_OFFSET);
 		ctrl_reg &= ~XTTCPS_CNT_CNTRL_DISABLE_MASK;
-		__raw_writel(ctrl_reg,
+		xttc_writereg(ctrl_reg,
 				timer->base_addr + XTTCPS_CNT_CNTRL_OFFSET);
 		break;
 	}
@@ -284,10 +329,10 @@ static void __init zynq_ttc_setup_clocksource(struct clk *clk,
 	 * with no interrupt and it rolls over at 0xFFFF. Pre-scale
 	 * it by 32 also. Let it start running now.
 	 */
-	__raw_writel(0x0,  ttccs->xttc.base_addr + XTTCPS_IER_OFFSET);
-	__raw_writel(CLK_CNTRL_PRESCALE,
+	xttc_writereg(0x0,  ttccs->xttc.base_addr + XTTCPS_IER_OFFSET);
+	xttc_writereg(CLK_CNTRL_PRESCALE,
 		     ttccs->xttc.base_addr + XTTCPS_CLK_CNTRL_OFFSET);
-	__raw_writel(CNT_CNTRL_RESET,
+	xttc_writereg(CNT_CNTRL_RESET,
 		     ttccs->xttc.base_addr + XTTCPS_CNT_CNTRL_OFFSET);
 
 	err = clocksource_register_hz(&ttccs->cs,
@@ -367,10 +412,10 @@ static void __init zynq_ttc_setup_clockevent(struct clk *clk,
 	 * is prescaled by 32 using the interval interrupt. Leave it
 	 * disabled for now.
 	 */
-	__raw_writel(0x23, ttcce->xttc.base_addr + XTTCPS_CNT_CNTRL_OFFSET);
-	__raw_writel(CLK_CNTRL_PRESCALE,
+	xttc_writereg(0x23, ttcce->xttc.base_addr + XTTCPS_CNT_CNTRL_OFFSET);
+	xttc_writereg(CLK_CNTRL_PRESCALE,
 		     ttcce->xttc.base_addr + XTTCPS_CLK_CNTRL_OFFSET);
-	__raw_writel(0x1,  ttcce->xttc.base_addr + XTTCPS_IER_OFFSET);
+	xttc_writereg(0x1,  ttcce->xttc.base_addr + XTTCPS_IER_OFFSET);
 
 	err = request_irq(irq, xttcps_clock_event_interrupt,
 			  IRQF_DISABLED | IRQF_TIMER,
@@ -391,18 +436,43 @@ static void __init zynq_ttc_setup_clockevent(struct clk *clk,
 static void __init xttcps_timer_init(struct device_node *timer)
 {
 	unsigned int irq;
-	void __iomem *timer_baseaddr;
 	struct clk *clk;
+	struct resource res;
+	const void *ptr;
 
 	/*
 	 * Get the 1st Triple Timer Counter (TTC) block from the device tree
 	 * and use it. Note that the event timer uses the interrupt and it's the
 	 * 2nd TTC hence the irq_of_parse_and_map(,1)
 	 */
-	timer_baseaddr = of_iomap(timer, 0);
-	if (!timer_baseaddr) {
-		pr_err("ERROR: invalid timer base address\n");
+	if (of_address_to_resource(timer, 0, &res)) {
+		pr_err("%s: Unable to retrieve physical addresses\n, __func__");
 		BUG();
+	}
+	init_timer.phys_regs = (void *)res.start;
+
+	init_timer.virt_regs = ioremap(res.start, resource_size(&res));
+	if (!init_timer.virt_regs) {
+		pr_err("%s: Uname to map timer memory\n", __func__);
+		BUG();
+	}
+
+	ptr = of_get_property(timer, "arm-world", NULL);
+	if (!ptr) {
+		pr_info("No world specified for TrustZone configuration "
+			"mapping device to 'normal world' as default\n");
+		init_timer.map_world = 0; /* map to normal world by default */
+		init_timer.regs = init_timer.virt_regs;
+	} else {
+		init_timer.map_world = be32_to_cpup(ptr);
+		if (init_timer.map_world == 0)
+			init_timer.regs = init_timer.virt_regs;
+		else if (init_timer.map_world == 1)
+			init_timer.regs = init_timer.phys_regs;
+		else {
+			pr_err("%s: Bad 'world' in device tree\n", __func__);
+			BUG();
+		}
 	}
 
 	irq = irq_of_parse_and_map(timer, 1);
@@ -417,13 +487,19 @@ static void __init xttcps_timer_init(struct device_node *timer)
 		BUG();
 	}
 
-	zynq_ttc_setup_clocksource(clk, timer_baseaddr);
-	zynq_ttc_setup_clockevent(clk, timer_baseaddr + 4, irq);
+	pr_info("%s #0 phys: %p, irq=%d\n", timer->name, init_timer.phys_regs,
+			irq);
+	pr_info("%s #0 virt: %p, irq=%d\n", timer->name, init_timer.virt_regs,
+			irq);
+
+	zynq_ttc_setup_clocksource(clk, init_timer.regs + 8); /*1st timer*/
+	zynq_ttc_setup_clockevent(clk, init_timer.regs + 4, irq); /*2nd timer*/
 
 #ifdef CONFIG_HAVE_ARM_TWD
 	twd_local_timer_of_register();
 #endif
-	pr_info("%s #0 at %p, irq=%d\n", timer->name, timer_baseaddr, irq);
+	pr_info("%s #0 mapped to: %p, irq=%d\n", timer->name, init_timer.regs,
+			irq);
 }
 
 /*

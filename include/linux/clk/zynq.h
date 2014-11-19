@@ -14,7 +14,8 @@
 #ifndef __LINUX_CLK_ZYNQ_H_
 #define __LINUX_CLK_ZYNQ_H_
 
-void __init zynq_clock_init(void __iomem *slcr);
+void __init zynq_clock_init(void __iomem *slcr_virt_base, void *slcr_phys_base,
+		u8 map_world);
 
 struct clk *clk_register_zynq_gd1m(const char *name,
 		void __iomem *clkctrl, const char **pnames,

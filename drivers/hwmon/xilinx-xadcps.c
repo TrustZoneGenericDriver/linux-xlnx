@@ -28,6 +28,7 @@
 #include <linux/kobject.h>
 #include <linux/io.h>
 #include <linux/spinlock.h>
+#include <linux/of.h>
 
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
@@ -119,9 +120,6 @@
 /* Sequencer registers 0 */
 #define REG_SEQ_V		(1 << 11)
 
-#define READ(dev, reg) readl((dev->iobase + XADC_##reg))
-#define WRITE(dev, reg, value) writel(value, dev->iobase+XADC_##reg)
-
 #define GETFIELD(reg, field, value) \
 	(((value) >> (reg##_##field##_SHIFT)) & reg##_##field##_MSK)
 
@@ -167,9 +165,50 @@ struct xadc_t {
 	struct list_head runq;
 	struct xadc_batch *curr;
 	u32 chanmode[17];	/* Channel 0-15 VAUX, 16 is V */
+	u8 map_world;
 	#define CHAN_ON		1
 	#define CHAN_BIPOLAR	2
 };
+
+static struct xadc_t *xadc;
+
+extern uint32_t secure_read(void *);
+extern void secure_write(uint32_t, void *);
+
+/*
+ * TODO: Generalize this in the TrustZone driver so that each
+ * target implements this operation. This is done to support
+ * architectures where virtual addresses are not aligned. This shoud be
+ * accessible to any target supporting TrustZone.
+ */
+static inline u32 xadc_readreg(void *addr)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if ((xadc->map_world == 1) &&  (((u32)addr & 0xffffff00) ==
+				((u32)xadc->iobase & 0xffffff00)))
+		return secure_read(xadc->mem->start + ((u32)addr & 0xff));
+	else
+		return readl(addr);
+}
+
+static inline void xadc_writereg(u32 val, void *addr)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if ((xadc->map_world == 1) && (((u32)addr & 0xffffff00) ==
+				((u32)xadc->iobase & 0xffffff00)))
+		secure_write(val, xadc->mem->start + ((u32)addr & 0xff));
+	else
+		writel(val, addr);
+}
+
+#define READ(dev, reg) xadc_readreg((dev->iobase + XADC_##reg))
+#define WRITE(dev, reg, value) xadc_writereg(value, dev->iobase+XADC_##reg)
 
 
 static void run_batch(struct xadc_t *xadc)
@@ -656,9 +695,11 @@ static struct xadc_batch setup = {
 
 static int xadc_probe(struct platform_device *pdev)
 {
-	struct xadc_t *xadc;
+	void *ptr;
 	u16 val;
 	int ret;
+
+	pr_info("XADC driver probe\n");
 
 	xadc = kzalloc(sizeof(*xadc), GFP_KERNEL);
 	if (!xadc) {
@@ -690,11 +731,28 @@ static int xadc_probe(struct platform_device *pdev)
 		goto err_free;
 	}
 
+	pr_info("XADC physical address: %p\n", xadc->mem->start);
+
 	xadc->iobase = ioremap(xadc->mem->start, resource_size(xadc->mem));
 	if (!xadc->iobase) {
 		ret = -ENODEV;
 		dev_err(xadc->dev, "Failed to ioremap memory\n");
 		goto err_mem_region;
+	}
+
+	ptr = of_get_property(xadc->dev->of_node, "arm-world", NULL);
+	if (!ptr) {
+		pr_info("No world specified for TrustZone configuration "
+			"mapping device to 'normal world' as default\n");
+		xadc->map_world = 0; /* map to normal world by default */
+	} else {
+		xadc->map_world = be32_to_cpup(ptr);
+		if ((xadc->map_world != 0) && (xadc->map_world != 1)) {
+			pr_err("%s: Bad 'world' in device tree\n", __func__);
+			BUG();
+		} else {
+			pr_info("XADC world:%d\n", xadc->map_world);
+		}
 	}
 
 	ret = request_irq(xadc->irq, xadc_irq, IRQF_SHARED, "xadc", xadc);

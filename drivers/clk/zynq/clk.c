@@ -20,28 +20,25 @@
 #include <linux/of.h>
 #include <linux/clk/zynq.h>
 
-#define SLCR_ARM_CLK_CTRL		(slcr_base + 0x120)
-#define SLCR_DDR_CLK_CTRL		(slcr_base + 0x124)
-#define SLCR_DCI_CLK_CTRL		(slcr_base + 0x128)
-#define SLCR_APER_CLK_CTRL		(slcr_base + 0x12c)
-#define SLCR_GEM0_CLK_CTRL		(slcr_base + 0x140)
-#define SLCR_GEM1_CLK_CTRL		(slcr_base + 0x144)
-#define SLCR_SMC_CLK_CTRL		(slcr_base + 0x148)
-#define SLCR_LQSPI_CLK_CTRL		(slcr_base + 0x14c)
-#define SLCR_SDIO_CLK_CTRL		(slcr_base + 0x150)
-#define SLCR_UART_CLK_CTRL		(slcr_base + 0x154)
-#define SLCR_SPI_CLK_CTRL		(slcr_base + 0x158)
-#define SLCR_CAN_CLK_CTRL		(slcr_base + 0x15c)
-#define SLCR_DBG_CLK_CTRL		(slcr_base + 0x164)
-#define SLCR_PCAP_CLK_CTRL		(slcr_base + 0x168)
-#define SLCR_FPGA0_CLK_CTRL		(slcr_base + 0x170)
-#define SLCR_FPGA1_CLK_CTRL		(slcr_base + 0x180)
-#define SLCR_FPGA2_CLK_CTRL		(slcr_base + 0x190)
-#define SLCR_FPGA3_CLK_CTRL		(slcr_base + 0x1a0)
-#define SLCR_621_TRUE			(slcr_base + 0x1c4)
-
-static void __iomem *zynq_slcr_base;
-
+#define SLCR_ARM_CLK_CTRL		(init_clk.virt_regs + 0x120)
+#define SLCR_DDR_CLK_CTRL		(init_clk.virt_regs + 0x124)
+#define SLCR_DCI_CLK_CTRL		(init_clk.virt_regs + 0x128)
+#define SLCR_APER_CLK_CTRL		(init_clk.virt_regs + 0x12c)
+#define SLCR_GEM0_CLK_CTRL		(init_clk.virt_regs + 0x140)
+#define SLCR_GEM1_CLK_CTRL		(init_clk.virt_regs + 0x144)
+#define SLCR_SMC_CLK_CTRL		(init_clk.virt_regs + 0x148)
+#define SLCR_LQSPI_CLK_CTRL		(init_clk.virt_regs + 0x14c)
+#define SLCR_SDIO_CLK_CTRL		(init_clk.virt_regs + 0x150)
+#define SLCR_UART_CLK_CTRL		(init_clk.virt_regs + 0x154)
+#define SLCR_SPI_CLK_CTRL		(init_clk.virt_regs + 0x158)
+#define SLCR_CAN_CLK_CTRL		(init_clk.virt_regs + 0x15c)
+#define SLCR_DBG_CLK_CTRL		(init_clk.virt_regs + 0x164)
+#define SLCR_PCAP_CLK_CTRL		(init_clk.virt_regs + 0x168)
+#define SLCR_FPGA0_CLK_CTRL		(init_clk.virt_regs + 0x170)
+#define SLCR_FPGA1_CLK_CTRL		(init_clk.virt_regs + 0x180)
+#define SLCR_FPGA2_CLK_CTRL		(init_clk.virt_regs + 0x190)
+#define SLCR_FPGA3_CLK_CTRL		(init_clk.virt_regs + 0x1a0)
+#define SLCR_621_TRUE			(init_clk.virt_regs + 0x1c4)
 
 /* clock implementation for Zynq PLLs */
 
@@ -83,6 +80,51 @@ struct zynq_pll {
 #define PLLCFG_PLLCP_SHIFT	8
 #define PLLCFG_LOCKCNT_MASK	0x3ff000
 #define PLLCFG_LOCKCNT_SHIFT	12
+
+struct xclk {
+	void __iomem	*virt_regs;
+	void		*phys_regs;
+	void		*slcr_regs;
+	int		map_world;
+};
+
+static struct xclk init_clk;
+
+extern uint32_t secure_read(void *);
+extern void secure_write(uint32_t, void *);
+
+/*
+ * TODO: Generalize this in the TrustZone driver so that each
+ * target implements this operation. This is done to support
+ * architectures where virtual addresses are not aligned. This shoud be
+ * accessible to any target supporting TrustZone.
+ */
+u32 clk_readreg(const volatile void __iomem *addr)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (init_clk.map_world == 0) {
+		/* TrustZone's normal world */
+		return readl(addr);
+	} else if (init_clk.map_world == 1)
+		return secure_read(addr);
+}
+
+void clk_writereg(u32 val, volatile void __iomem *addr)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (init_clk.map_world == 0) {
+		/* TrustZone's normal world */
+		writel(val, addr);
+	} else if (init_clk.map_world == 1) {
+		secure_write(val, addr);
+	}
+}
 
 /**
  * zynq_pll_get_params() - Get PLL parameters for given feedback divider
@@ -216,30 +258,30 @@ static int zynq_pll_set_rate(struct clk_hw *hw, unsigned long rate,
 	spin_lock_irqsave(&clk->lock, flags);
 
 	/* Write new parameters */
-	reg = readl(clk->pll_ctrl);
+	reg = clk_readreg(clk->pll_ctrl);
 	reg &= ~PLLCTRL_FBDIV_MASK;
 	reg |= (fbdiv << PLLCTRL_FBDIV_SHIFT) & PLLCTRL_FBDIV_MASK;
-	writel(reg, clk->pll_ctrl);
+	clk_writereg(reg, clk->pll_ctrl);
 
 	reg = (pll_res << PLLCFG_PLLRES_SHIFT) & PLLCFG_PLLRES_MASK;
 	reg |= (pll_cp << PLLCFG_PLLCP_SHIFT) & PLLCFG_PLLCP_MASK;
 	reg |= (lock_cnt << PLLCFG_LOCKCNT_SHIFT) & PLLCFG_LOCKCNT_MASK;
-	writel(reg, clk->pll_cfg);
+	clk_writereg(reg, clk->pll_cfg);
 
 	/* bypass PLL */
-	reg = readl(clk->pll_ctrl);
+	reg = clk_readreg(clk->pll_ctrl);
 	reg |= PLLCTRL_BYPASS_MASK;
-	writel(reg, clk->pll_ctrl);
+	clk_writereg(reg, clk->pll_ctrl);
 	/* reset PLL */
 	reg |= PLLCTRL_RESET_MASK;
-	writel(reg, clk->pll_ctrl);
+	clk_writereg(reg, clk->pll_ctrl);
 	reg &= ~PLLCTRL_RESET_MASK;
-	writel(reg, clk->pll_ctrl);
+	clk_writereg(reg, clk->pll_ctrl);
 	/* wait for PLL lock */
-	while (readl(clk->pll_status) & (1 << clk->lockbit)) ;
+	while (clk_readreg(clk->pll_status) & (1 << clk->lockbit)) ;
 	/* remove bypass */
 	reg &= ~PLLCTRL_BYPASS_MASK;
-	writel(reg, clk->pll_ctrl);
+	clk_writereg(reg, clk->pll_ctrl);
 
 	spin_unlock_irqrestore(&clk->lock, flags);
 
@@ -288,7 +330,7 @@ static unsigned long zynq_pll_recalc_rate(struct clk_hw *hw, unsigned long
 
 	/* makes probably sense to redundantly save fbdiv in the struct
 	 * zynq_pll to save the IO access. */
-	fbdiv = (readl(clk->pll_ctrl) & PLLCTRL_FBDIV_MASK) >>
+	fbdiv = (clk_readreg(clk->pll_ctrl) & PLLCTRL_FBDIV_MASK) >>
 		PLLCTRL_FBDIV_SHIFT;
 
 	return parent_rate * fbdiv;
@@ -313,15 +355,15 @@ static int zynq_pll_enable(struct clk_hw *hw)
 	/* Power up PLL and wait for lock before removing bypass */
 	spin_lock_irqsave(&clk->lock, flags);
 
-	reg = readl(clk->pll_ctrl);
+	reg = clk_readreg(clk->pll_ctrl);
 	reg &= ~(PLLCTRL_RESET_MASK | PLLCTRL_PWRDWN_MASK);
-	writel(reg, clk->pll_ctrl);
-	while (readl(clk->pll_status) & (1 << clk->lockbit))
+	clk_writereg(reg, clk->pll_ctrl);
+	while (clk_readreg(clk->pll_status) & (1 << clk->lockbit))
 		;
 
-	reg = readl(clk->pll_ctrl);
+	reg = clk_readreg(clk->pll_ctrl);
 	reg &= ~PLLCTRL_BYPASS_MASK;
-	writel(reg, clk->pll_ctrl);
+	clk_writereg(reg, clk->pll_ctrl);
 
 	spin_unlock_irqrestore(&clk->lock, flags);
 
@@ -349,11 +391,11 @@ static void zynq_pll_disable(struct clk_hw *hw)
 	/* Set bypass bit and shut down PLL */
 	spin_lock_irqsave(&clk->lock, flags);
 
-	reg = readl(clk->pll_ctrl);
+	reg = clk_readreg(clk->pll_ctrl);
 	reg |= PLLCTRL_BYPASS_MASK;
-	writel(reg, clk->pll_ctrl);
+	clk_writereg(reg, clk->pll_ctrl);
 	reg |= PLLCTRL_RESET_MASK | PLLCTRL_PWRDWN_MASK;
-	writel(reg, clk->pll_ctrl);
+	clk_writereg(reg, clk->pll_ctrl);
 
 	spin_unlock_irqrestore(&clk->lock, flags);
 
@@ -419,25 +461,25 @@ static void clk_register_zynq_pll(struct device_node *np)
 
 	/* Populate the struct */
 	pll->hw.init = &initd;
-	pll->pll_ctrl = zynq_slcr_base + regs[0];
-	pll->pll_cfg = zynq_slcr_base + regs[1];
-	pll->pll_status = zynq_slcr_base + regs[2];
+	pll->pll_ctrl = init_clk.slcr_regs + regs[0];
+	pll->pll_cfg = init_clk.slcr_regs + regs[1];
+	pll->pll_status = init_clk.slcr_regs + regs[2];
 	spin_lock_init(&pll->lock);
 	ret = of_property_read_u32(np, "lockbit", &pll->lockbit);
 	if (WARN_ON(ret))
 		goto free_pll;
 
 
-	if (readl(pll->pll_ctrl) & PLLCTRL_BYPASS_MASK)
+	if (clk_readreg(pll->pll_ctrl) & PLLCTRL_BYPASS_MASK)
 		pll->bypassed = 1;
 	else
 		pll->bypassed = 0;
 
 	spin_lock_irqsave(&pll->lock, flags);
 
-	reg = readl(pll->pll_ctrl);
+	reg = clk_readreg(pll->pll_ctrl);
 	reg &= ~PLLCTRL_BPQUAL_MASK;
-	writel(reg, pll->pll_ctrl);
+	clk_writereg(reg, pll->pll_ctrl);
 
 	spin_unlock_irqrestore(&pll->lock, flags);
 
@@ -519,15 +561,25 @@ static const struct of_device_id clk_match[] __initconst = {
  * To avoid enabling unused clocks, only leaf clocks are present for which the
  * drivers supports the common clock framework.
  */
-void __init zynq_clock_init(void __iomem *slcr_base)
+void __init zynq_clock_init(void __iomem *slcr_virt_base, void *slcr_phys_base,
+		u8 map_world)
 {
 	struct clk *clk;
 
-	pr_info("Zynq clock init\n");
+	pr_info("Zynq clock init");
 
-	zynq_slcr_base = slcr_base;
+	init_clk.phys_regs = slcr_phys_base;
+	init_clk.virt_regs = slcr_virt_base;
+	init_clk.map_world = map_world;
+	if (init_clk.map_world == 1)
+		init_clk.slcr_regs = init_clk.phys_regs;
+	else
+		init_clk.slcr_regs = init_clk.virt_regs;
+		
+	pr_info("slcr regs: %p\n", init_clk.slcr_regs);
+	
 	of_clk_init(clk_match);
-
+	
 	/* CPU clocks */
 	clk = clk_register_zynq_d1m("CPU_MASTER_CLK", SLCR_ARM_CLK_CTRL,
 			cpu_parents, 4, &armclk_lock);

@@ -32,6 +32,47 @@
 #define div_mask(d)	((1 << (d->width)) - 1)
 #define is_power_of_two(i)	!(i & ~i)
 
+extern void __iomem *zynq_slcr_base;
+extern void __iomem *zynq_slcr_virt_base;
+
+/* TODO: We need to figure out if this is a good way to do this - I don't think
+ * so... We at least need to change the names here..
+ */
+extern uint32_t secure_read(void *);
+extern void secure_write(uint32_t, void *);
+
+static inline u32 sw_readl(void __iomem *addr)
+{
+	if (zynq_slcr_base == zynq_slcr_virt_base)
+		/* map_world == 0 */
+		return readl(addr);
+
+	if(((u32)addr & 0xfffff000) == (u32)zynq_slcr_virt_base) {
+		pr_info("secure_read. addr: %p, slcr_base1: %p\n", addr,
+				zynq_slcr_virt_base);
+		return secure_read(zynq_slcr_base + ((u32)addr & 0xfff));
+	} else {
+		pr_info("normal_read. addr: %p, slcr_base: %p\n", addr,
+				zynq_slcr_base);
+		return readl(addr);
+	}
+}
+
+static inline void sw_writel(volatile void __iomem *addr, u32 val)
+{
+	if (zynq_slcr_base == zynq_slcr_virt_base) {
+		/* map_world == 0 */
+		writel(val, addr);
+		return;
+	}
+
+	if(((u32)addr & 0xfffff000) == (u32)zynq_slcr_virt_base) {
+		secure_write(val, zynq_slcr_base + ((u32)addr & 0xfff));
+	} else {
+		writel(val, addr);
+	}
+}
+
 static unsigned int _get_table_maxdiv(const struct clk_div_table *table)
 {
 	unsigned int maxdiv = 0;
@@ -104,7 +145,9 @@ static unsigned long clk_divider_recalc_rate(struct clk_hw *hw,
 	struct clk_divider *divider = to_clk_divider(hw);
 	unsigned int div, val;
 
-	val = readl(divider->reg) >> divider->shift;
+	pr_info("Divider address: %p\n", divider->reg);
+
+	val = sw_readl(divider->reg) >> divider->shift;
 	val &= div_mask(divider);
 
 	div = _get_div(divider, val);
@@ -114,6 +157,7 @@ static unsigned long clk_divider_recalc_rate(struct clk_hw *hw,
 		return parent_rate;
 	}
 
+	pr_info("Passed this point\n");
 	return parent_rate / div;
 }
 
@@ -216,10 +260,10 @@ static int clk_divider_set_rate(struct clk_hw *hw, unsigned long rate,
 	if (divider->lock)
 		spin_lock_irqsave(divider->lock, flags);
 
-	val = readl(divider->reg);
+	val = sw_readl(divider->reg);
 	val &= ~(div_mask(divider) << divider->shift);
 	val |= value << divider->shift;
-	writel(val, divider->reg);
+	sw_writel(val, divider->reg);
 
 	if (divider->lock)
 		spin_unlock_irqrestore(divider->lock, flags);

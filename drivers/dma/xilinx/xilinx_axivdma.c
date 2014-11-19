@@ -142,9 +142,52 @@
 /* Device Id in the private structure */
 #define XILINX_VDMA_DEVICE_ID_SHIFT	28
 
+extern uint32_t secure_read(void *);
+extern void secure_write(uint32_t, void *);
+
+static u8 vdma_map_world;
+
+/*
+ * TODO: Generalize this in the TrustZone driver so that each
+ * target implements this operation. This is done to support
+ * architectures where virtual addresses are not aligned. This shoud be
+ * accessible to any target supporting TrustZone.
+ */
+u32 vdma_readreg(const volatile void __iomem *addr)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (vdma_map_world == 0) {
+		/* TrustZone's normal world */
+		/* pr_info("Normal read\n"); */
+		return ioread32(addr);
+	} else {
+		/* pr_info("Secure read\n"); */
+		return secure_read(addr);
+	}
+}
+
+void vdma_writereg(volatile void __iomem *addr, u32 val)
+{
+	/* Depending on the TrustZone's "world" the device belongs to use an
+	 * address space or another. This information is taken from the device
+	 * tree.
+	 */
+	if (vdma_map_world == 0) {
+		/* TrustZone's normal world */
+		/* pr_info("Normal write\n"); */
+		iowrite32(val, addr);
+	} else {
+		/* pr_info("Secure write\n"); */
+		secure_write(val, addr);
+	}
+}
+
 /* IO accessors */
-#define VDMA_OUT(addr, val)	(iowrite32(val, addr))
-#define VDMA_IN(addr)		(ioread32(addr))
+#define VDMA_OUT(addr, val)	(vdma_writereg(addr, val))
+#define VDMA_IN(addr)		(vdma_readreg(addr))
 
 /* Hardware descriptor */
 struct xilinx_vdma_desc_hw {
@@ -1197,8 +1240,10 @@ static int xilinx_vdma_of_probe(struct platform_device *op)
 	int err, i;
 	const __be32 *value;
 	int num_frames = 0;
+	void *ptr;
 
 	dev_info(&op->dev, "Probing xilinx axi vdma engine\n");
+	pr_info("XVDMA driver probe\n");
 
 	xdev = kzalloc(sizeof(struct xilinx_vdma_device), GFP_KERNEL);
 	if (!xdev) {
@@ -1219,6 +1264,23 @@ static int xilinx_vdma_of_probe(struct platform_device *op)
 		dev_err(&op->dev, "unable to iomap registers\n");
 		err = -ENOMEM;
 		goto out_free_xdev;
+	}
+
+	/* TrustZone world to which device is mapped */
+	/* TODO: Complete to support physical address space for secure world
+	 * use
+	 */
+	ptr = of_get_property(node, "arm-world", NULL);
+	if (!ptr) {
+		pr_info("No world specified for TrustZone configuration "
+			"mapping device to 'normal world' as default\n");
+		vdma_map_world = 0; /* map to normal world by default */
+	} else {
+		vdma_map_world = be32_to_cpup(ptr);
+		if ((vdma_map_world != 0) && (vdma_map_world != 1)) {
+			pr_err("%s: Bad 'world' in device tree\n", __func__);
+			BUG();
+		}
 	}
 
 	/* Axi VDMA only do slave transfers */
