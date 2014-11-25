@@ -15,6 +15,7 @@
 #include <linux/spinlock.h>
 
 #include "trustzone.h"
+#include "otz_id.h" /* TODO: Should not be here */
 
 static LIST_HEAD(trustzone_chip_list);
 static DEFINE_SPINLOCK(driver_lock);
@@ -29,6 +30,7 @@ static struct trustzone_chip *tz_chip_find_get(u32 chip_num)
 		if (chip_num != TRUSTZONE_ANY_NUM && chip_num != pos->dev_num)
 			continue;
 
+		/* XXX: Look into this: struct platform_driver otz_driver */
 		/* if (try_module_get(pos->dev->driver->owner)) { */
 			chip = pos;
 			break;
@@ -47,6 +49,7 @@ int __tz_open_session(struct trustzone_chip *chip,
 	 * we can directly communicate with the kernel without having to
 	 * translate here.. */
 
+	/* primitive = OTZ_SVC_TCXO; */
 	ret = chip->tz_ops.open(primitive, session);
 	if (ret) {
 		dev_err(chip->dev, "Open session failed in TrustZone chip (id:%d)\n",
@@ -54,7 +57,7 @@ int __tz_open_session(struct trustzone_chip *chip,
 		return ret;
 	}
 
-	/* XXX: We need to look into this: struct platform_driver 
+	/* XXX: We need to look into this: struct platform_driver otz_driver
 	 * This problem occurs up too;
 	 * */
 	/* trustzone_chip_put(chip); */
@@ -162,6 +165,51 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(tz_transmit_cmd);
+
+/* FIXME: Secure system primitives should not be hear since they are system
+ * defined
+ */
+int tz_monitor_syscall(u32 chip_num, struct trustzone_session *tz_session,
+		unsigned long sig, siginfo_t *sig_info)
+{
+	struct trustzone_cmd cmd;
+	struct trustzone_session my_tz_session;
+	struct trustzone_chip *chip;
+	int ret = 0;
+
+	/* TODO: This needs to be sent as a parameter, or made generic */
+	cmd.cmd = OTZ_SYSCALL_MONITOR;
+	chip = tz_chip_find_get(chip_num);
+	if (chip == NULL) {
+		dev_err(chip->dev, "Could not find TrustZone chip (id:%d) registered\n",
+				chip_num);
+		return -ENODEV;
+	}
+	mutex_lock(&chip->tz_mutex);
+	ret = __tz_open_session(chip, &my_tz_session,
+		TZ_SECURE_PRIMITIVE_SVC);
+
+	if (ret) {
+		dev_err(chip->dev, "Open session failed for SYSCALL_MONITOR");
+		return ret;
+	}
+	ret = __tz_transmit_cmd(chip, &my_tz_session, &cmd, NULL);
+
+	if (ret) {
+		dev_err(chip->dev, "Send SYSCALL_MONITOR to SW failed\n");
+		goto out;
+	}
+	ret = __tz_close_session(chip, &my_tz_session);
+
+	if (ret) {
+		dev_err(chip->dev, "Close session failed during test\n");
+		return ret;
+	}
+	mutex_unlock(&chip->tz_mutex);
+
+out:
+	return ret;
+}
 
 /*
  * Perform an operation in the TEE.
@@ -494,6 +542,45 @@ static int _test3(u32 chip_num, u8 target, u8 test_command)
 
 free:
 	_clean_test(&tz_param_list);
+out:
+	return ret;
+}
+
+int tz_send_test_operation(u32 chip_num, u8 tz_impl)
+{
+	struct trustzone_chip *chip;
+	u8 target, test_command;
+	int ret = 0;
+
+	/* TODO: Make test generic, not driver-specific */
+	chip = tz_chip_find_get(chip_num);
+	if (tz_impl == TZ_OPEN_VIRTUALIZATION) {
+		target = OTZ_SVC_TCXO;
+		test_command = OTZ_TCXO_TEST_CMD;
+	} else {
+		dev_err(chip->dev, "Unknown test implementation\n");
+		goto out;
+	}
+
+	/*
+	 * Test 1: Open and close session;
+	 */
+
+	/*
+	 * Test 2: Open and close session with:
+	 *	- INPUT uint32_t
+	 *	- OUTPUT uint32_t
+	 */
+
+	/*
+	 * Test3: Open and clase session with:
+	 *	- 2 X INPUT uint32_t
+	 *	- OUTPUT uint32_t
+	 *	- INPUT generic
+	 *	- OUTPUT generic
+	 */
+	ret = _test3(chip_num, target, test_command);
+
 out:
 	return ret;
 }
