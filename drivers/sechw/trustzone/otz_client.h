@@ -33,18 +33,6 @@
 
 #define OTZ_CLIENT_IOC_MAGIC 0x775B777F /* "OTZ Client" */
 
-#undef TDEBUG
-#ifdef OTZ_DEBUG
-#define TDEBUG(fmt, args...) pr_debug("%s(%i, %s): " fmt "\n", \
-		__func__, current->pid, current->comm, ## args)
-#else
-#define TDEBUG(fmt, args...)
-#endif
-
-#undef TERR
-#define TERR(fmt, args...) pr_debug("%s(%i, %s): " fmt "\n", \
-		__func__, current->pid, current->comm, ## args)
-
 /** IOCTL request */
 
 /** @defgroup tzuserapi  TrustZone Linux User API

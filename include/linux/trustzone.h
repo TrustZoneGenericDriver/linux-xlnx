@@ -69,14 +69,16 @@ struct trustzone_session{
 /*
  * Hooks to Secure System Primitives
  */
-extern int tz_monitor_syscall(u32, struct trustzone_session*, unsigned long, 
+extern int tz_monitor_syscall(u32, struct trustzone_session*, unsigned long,
 		siginfo_t*);
 
 /*
- * Generic Operations
+ * TrustZone Generic Operations
  */
-extern int tz_open_session(u32, struct trustzone_session*, u8);
-extern int tz_close_session(u32, struct trustzone_session*);
+extern int tz_open(u32, struct trustzone_session*, u8);
+extern int tz_close(u32, struct trustzone_session*);
+extern int tz_transmit(u32, struct trustzone_session*, struct trustzone_cmd*,
+		struct trustzone_parameter_list*);
 extern int tz_send_operation(u32, struct trustzone_session*, struct
 		trustzone_cmd*, struct trustzone_parameter_list*);
 
