@@ -10,15 +10,19 @@
 #include <linux/miscdevice.h>
 #include <linux/trustzone.h>
 
-#include "otz_api.h"
-#include "utils.h"
-
 /* Maximun number of letter for a TrustZone device name string */
 #define TRUSTZONE_NAME_MAX	10
 
 enum tpm_const {
 	/* TRUSTZONE_MINOR = X, */
 	TRUSTZONE_NUM_DEVICES = 256,
+};
+
+/**
+ * Enums used for secure system primitives
+ */
+enum tz_secure_system_primitives {
+	TZ_SYSCALL_MONITOR = 0x0,
 };
 
 struct trustzone_operations {

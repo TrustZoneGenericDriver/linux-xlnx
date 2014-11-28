@@ -99,9 +99,9 @@ static struct class *driver_class;
 static dev_t otz_client_device_no;
 static struct cdev otz_client_cdev;
 static u32 cacheline_size;
-static u32 device_file_cnt = 0;
+static u32 device_file_cnt;
 #ifdef OTZONE_ASYNC_NOTIFY_SUPPORT
-static struct otzc_notify_data *notify_data = NULL;
+static struct otzc_notify_data *notify_data;
 static int current_guest_id;
 #endif
 static struct otz_smc_cdata otz_smc_cd[NR_CPUS];
@@ -224,10 +224,10 @@ static void secondary_otz_smc_handler(void *info)
 	struct otz_smc_cdata *cd = (struct otz_smc_cdata *)info;
 
 	rmb();
-	TDEBUG("secondary otz smc handler");
+	pr_debug("secondary otz smc handler");
 	cd->ret_val = _otz_smc(cd->cmd_addr);
 	wmb();
-	TDEBUG("done smc on primary");
+	pr_debug("done smc on primary");
 }
 
 /**
@@ -237,13 +237,13 @@ static u32 post_otz_smc(int cpu_id, u32 cmd_addr)
 {
 	struct otz_smc_cdata *cd = &otz_smc_cd[cpu_id];
 
-	TDEBUG("post from secondary");
+	pr_debug("post from secondary");
 	cd->cmd_addr = cmd_addr;
 	cd->ret_val  = 0;
 	wmb();
 	smp_call_function_single(0, secondary_otz_smc_handler, (void *)cd, 1);
 	rmb();
-	TDEBUG("completed smc on secondary");
+	pr_debug("completed smc on secondary");
 	return cd->ret_val;
 }
 
@@ -293,11 +293,11 @@ static int otz_smc_call(u32 dev_file_id, u32 svc_id, u32 cmd_id,
 	smc_cmd = kmalloc(sizeof(struct otz_smc_cmd),
 			GFP_KERNEL);
 	if (!smc_cmd) {
-		TERR("kmalloc failed for smc command\n");
+		pr_err("kmalloc failed for smc command\n");
 		ret = -ENOMEM;
 		goto out;
 	}
-	OTZ_DBG("Allocate smc_cmd: %dB\n", sizeof(smc_cmd));
+	pr_debug("Allocate smc_cmd: %dB\n", sizeof(smc_cmd));
 
 	if (ret_resp_len)
 		*ret_resp_len = 0;
@@ -360,7 +360,7 @@ static int otz_smc_call(u32 dev_file_id, u32 svc_id, u32 cmd_id,
 #endif
 
 	if (ret) {
-		TERR("smc_call returns error");
+		pr_err("smc_call returns error");
 		goto out;
 	}
 
@@ -369,7 +369,7 @@ static int otz_smc_call(u32 dev_file_id, u32 svc_id, u32 cmd_id,
 
 out:
 	if (smc_cmd) {
-		OTZ_DBG("Freeing smc_cmd: %dB", sizeof(smc_cmd));
+		pr_debug("Freeing smc_cmd: %dB", sizeof(smc_cmd));
 		kfree(smc_cmd);
 	}
 	return ret;
@@ -389,12 +389,12 @@ static void ipi_secure_notify(struct pt_regs *regs)
 		return;
 
 	if (notify_data->guest_no != current_guest_id) {
-		TERR("Invalid notification from guest id %d",
+		pr_err("Invalid notification from guest id %d",
 				notify_data->guest_no);
 	}
-	TDEBUG("guest id %d", notify_data->guest_no);
-	TDEBUG("otz_client pid 0x%x", notify_data->client_pid);
-	TDEBUG("otz_client_notify_handler service id 0x%x \
+	pr_debug("guest id %d", notify_data->guest_no);
+	pr_debug("otz_client pid 0x%x", notify_data->client_pid);
+	pr_debug("otz_client_notify_handler service id 0x%x \
 			session id 0x%x and encoder id 0x%x",
 			notify_data->service_id, notify_data->session_id,
 			notify_data->enc_id);
@@ -403,20 +403,20 @@ static void ipi_secure_notify(struct pt_regs *regs)
 	list_for_each_entry(temp_dev_file, &otzc_dev_file_head.dev_file_list,
 			head) {
 		if (temp_dev_file->dev_file_id == notify_data->dev_file_id) {
-			TDEBUG("dev file id %d", temp_dev_file->dev_file_id);
+			pr_debug("dev file id %d", temp_dev_file->dev_file_id);
 			list_for_each_entry(temp_svc,
 					&temp_dev_file->services_list, head){
 				if (temp_svc->service_id == notify_data->service_id) {
-					TDEBUG("send cmd ser id %d", temp_svc->service_id);
+					pr_debug("send cmd ser id %d", temp_svc->service_id);
 					list_for_each_entry(temp_ses, &temp_svc->sessions_list,
 							head) {
 						if (temp_ses->session_id == notify_data->session_id) {
-							TDEBUG("send cmd ses id %d",
+							pr_debug("send cmd ses id %d",
 									temp_ses->session_id);
 							list_for_each_entry(enc_temp, &temp_ses->encode_list,
 									head) {
 								if (enc_temp->encode_id == notify_data->enc_id) {
-									TDEBUG("send cmd enc id 0x%x",
+									pr_debug("send cmd enc id 0x%x",
 											enc_temp->encode_id);
 									enc_found = 1;
 									break;
@@ -464,7 +464,7 @@ static void otz_client_close_session_for_service(
 	if (!temp_svc || !temp_ses)
 		return;
 
-	TDEBUG("freeing ses_id %d", temp_ses->session_id);
+	pr_debug("freeing ses_id %d", temp_ses->session_id);
 	otz_smc_call(dev_file_id, OTZ_SVC_GLOBAL,
 			OTZ_GLOBAL_CMD_ID_CLOSE_SESSION, 0, 0,
 			&temp_svc->service_id,
@@ -478,11 +478,11 @@ static void otz_client_close_session_for_service(
 				&temp_ses->encode_list, head) {
 			list_del(&enc_context->head);
 			if (enc_context->meta != NULL) {
-				OTZ_DBG("Freeing enc_context->meta: %dB",
+				pr_debug("Freeing enc_context->meta: %dB",
 						sizeof(enc_context->meta));
 				kfree(enc_context->meta);
 			}
-			OTZ_DBG("Freeing enc_context: %dB",
+			pr_debug("Freeing enc_context: %dB",
 					sizeof(enc_context));
 			kfree(enc_context);
 		}
@@ -497,12 +497,12 @@ static void otz_client_close_session_for_service(
 				free_pages((u32)shared_mem->k_addr,
 					get_order(ROUND_UP(shared_mem->len,
 					SZ_4K)));
-			OTZ_DBG("Freeing shared_mem%dB", sizeof(shared_mem));
+			pr_debug("Freeing shared_mem%dB", sizeof(shared_mem));
 			kfree(shared_mem);
 		}
 	}
 
-	OTZ_DBG("Freeing temp_ses%dB", sizeof(temp_ses));
+	pr_debug("Freeing temp_ses%dB", sizeof(temp_ses));
 	kfree(temp_ses);
 }
 
@@ -516,12 +516,12 @@ static int otz_client_service_init(struct otz_dev_file *dev_file,
 	svc_new = kmalloc(sizeof(struct otz_service),
 			GFP_KERNEL);
 	if (!svc_new) {
-		TERR("kmalloc failed");
+		pr_err("kmalloc failed");
 		ret_code = -ENOMEM;
 		goto clean_prev_malloc;
 	}
 
-	OTZ_DBG("Allocate svc_new: %dB", sizeof(svc_new));
+	pr_debug("Allocate svc_new: %dB", sizeof(svc_new));
 	svc_new->service_id = service_id;
 	dev_file->service_cnt++;
 	INIT_LIST_HEAD(&svc_new->sessions_list);
@@ -533,7 +533,7 @@ clean_prev_malloc:
 		list_for_each_entry_safe(svc_new, temp_pos,
 				&dev_file->services_list, head) {
 			list_del(&svc_new->head);
-			OTZ_DBG("Freeing svc_new: %dB", sizeof(svc_new));
+			pr_debug("Freeing svc_new: %dB", sizeof(svc_new));
 			kfree(svc_new);
 		}
 	}
@@ -561,7 +561,7 @@ static int otz_client_service_exit(u32 dev_file_id)
 					free_pages((u32)temp_shared_mem->k_addr,
 							get_order(ROUND_UP(temp_shared_mem->len, SZ_4K)));
 				if (temp_shared_mem) {
-					OTZ_DBG("Freeing temp_shared_mem: %dB", sizeof(temp_shared_mem));
+					pr_debug("Freeing temp_shared_mem: %dB", sizeof(temp_shared_mem));
 					kfree(temp_shared_mem);
 				}
 			}
@@ -575,13 +575,13 @@ static int otz_client_service_exit(u32 dev_file_id)
 								tmp_svc, temp_ses);
 					}
 					list_del(&tmp_svc->head);
-					OTZ_DBG("Freeing tmp_svc: %dB", sizeof(tmp_svc));
+					pr_debug("Freeing tmp_svc: %dB", sizeof(tmp_svc));
 					kfree(tmp_svc);
 				}
 			}
 
 			list_del(&tem_dev_file->head);
-			OTZ_DBG("Freeing temp_dev_file: %dB", sizeof(tmp_svc));
+			pr_debug("Freeing temp_dev_file: %dB", sizeof(tmp_svc));
 			kfree(tem_dev_file);
 			break;
 		}
@@ -600,7 +600,7 @@ static int __otz_client_session_open(u32 device_id, struct ser_ses_id *ses_open,
 	int ret_val = 0, ret_resp_len;
 	u32 dev_file_id = (u32)device_id;
 
-	TDEBUG("service_id = %d", ses_open->service_id);
+	pr_debug("service_id = %d", ses_open->service_id);
 	list_for_each_entry(temp_dev_file, &otzc_dev_file_head.dev_file_list,
 			head) {
 		if (temp_dev_file->dev_file_id == dev_file_id) {
@@ -623,12 +623,12 @@ static int __otz_client_session_open(u32 device_id, struct ser_ses_id *ses_open,
 	ses_new = kmalloc(sizeof(struct otz_session),
 			GFP_KERNEL);
 	if (!ses_new) {
-		TERR("kmalloc failed\n");
+		pr_err("kmalloc failed\n");
 		ret_val =  -ENOMEM;
 		goto ret_error;
 	}
 
-	TDEBUG("service id 0x%x\n", ses_open->service_id);
+	pr_debug("service id 0x%x\n", ses_open->service_id);
 	ret_val = otz_smc_call(dev_file_id, OTZ_SVC_GLOBAL,
 			OTZ_GLOBAL_CMD_ID_OPEN_SESSION, 0, 0,
 			&ses_open->service_id, sizeof(ses_open->service_id),
@@ -636,20 +636,20 @@ static int __otz_client_session_open(u32 device_id, struct ser_ses_id *ses_open,
 			&ret_resp_len, NULL, NULL);
 
 	if (ret_val != SMC_SUCCESS) {
-		OTZ_DBG("Freeing ses_new: %dB", sizeof(ses_new));
+		pr_debug("Freeing ses_new: %dB", sizeof(ses_new));
 		kfree(ses_new);
 		goto ret_error;
 	}
 
 	if (ses_new->session_id == -1) {
-		TERR("invalid session id\n");
+		pr_err("invalid session id\n");
 		ret_val =  -EINVAL;
-		OTZ_DBG("Freeing ses_new: %dB", sizeof(ses_new));
+		pr_debug("Freeing ses_new: %dB", sizeof(ses_new));
 		kfree(ses_new);
 		goto ret_error;
 	}
 
-	TDEBUG("session id 0x%x for service id 0x%x", ses_new->session_id,
+	pr_debug("session id 0x%x for service id 0x%x", ses_new->session_id,
 			ses_open->service_id);
 
 	ses_open->session_id = ses_new->session_id;
@@ -718,7 +718,7 @@ static int otz_client_prepare_decode(void *private_data,
 					list_for_each_entry(temp_ses, &temp_svc->sessions_list,
 							head) {
 						if (temp_ses->session_id == dec->session_id) {
-							TDEBUG("enc cmd ses id %d", temp_ses->session_id);
+							pr_debug("enc cmd ses id %d", temp_ses->session_id);
 							session_found = 1;
 							break;
 						}
@@ -731,7 +731,7 @@ static int otz_client_prepare_decode(void *private_data,
 	}
 
 	if (!session_found) {
-		TERR("session not found");
+		pr_err("session not found");
 		ret = -EINVAL;
 		goto return_func;
 	}
@@ -772,11 +772,11 @@ static int __otz_client_encode_uint32(void *private_data,
 			enc_context->ker_req_data_addr = kmalloc(OTZ_1K_SIZE,
 					GFP_KERNEL);
 			if (!enc_context->ker_req_data_addr) {
-				TERR("kmalloc failed");
+				pr_err("kmalloc failed");
 				ret =  -ENOMEM;
 				goto return_func;
 			}
-			OTZ_DBG("Allocate enc_context->ker_req_data_addr: %dB", sizeof(enc_context->ker_req_data_addr));
+			pr_debug("Allocate enc_context->ker_req_data_addr: %dB", sizeof(enc_context->ker_req_data_addr));
 		}
 
 		if ((enc_context->enc_req_offset + sizeof(u32) <= OTZ_1K_SIZE)
@@ -799,11 +799,11 @@ static int __otz_client_encode_uint32(void *private_data,
 			enc_context->ker_res_data_addr = kmalloc(OTZ_1K_SIZE,
 					GFP_KERNEL);
 			if (!enc_context->ker_res_data_addr) {
-				TERR("kmalloc failed");
+				pr_err("kmalloc failed");
 				ret = -ENOMEM;
 				goto return_func;
 			}
-			OTZ_DBG("Allocate enc_context->ker_res_data_addr: %dB",
+			pr_debug("Allocate enc_context->ker_res_data_addr: %dB",
 					sizeof(enc_context->ker_res_data_addr));
 		}
 
@@ -838,14 +838,14 @@ static int otz_client_encode_uint32(void *private_data, void *argp)
 	int ret = 0;
 
 	if (copy_from_user(&enc, argp, sizeof(enc))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
 
 	ret = __otz_client_encode_uint32(private_data, &enc);
 	if (ret) {
-		TERR("otz_client error encoding uint32");
+		pr_err("otz_client error encoding uint32");
 		if (ret == -ENOMEM)
 			goto ret_encode_u32;
 		else
@@ -854,7 +854,7 @@ static int otz_client_encode_uint32(void *private_data, void *argp)
 
 ret_encode_u32:
 	if (copy_to_user(argp, &enc, sizeof(enc))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		return -EFAULT;
 	}
 
@@ -874,24 +874,24 @@ static int __otz_client_encode_array(void *private_data,
 	if (ret)
 		goto return_func;
 
-	TDEBUG("enc_id 0x%x", enc_context->encode_id);
+	pr_debug("enc_id 0x%x", enc_context->encode_id);
 
 	/* TODO: Map PARAM_IN, OUT and INOUT correctly
 	 * TODO: Use Linux LIST to do this
 	 */
 	if (enc->param_type == OTZC_PARAM_IN) {
 		if (!enc_context->ker_req_data_addr) {
-			TDEBUG("allocate req data\n");
+			pr_debug("allocate req data\n");
 			enc_context->ker_req_data_addr =
 				kmalloc(OTZ_1K_SIZE, GFP_KERNEL);
 			if (!enc_context->ker_req_data_addr) {
 				ret = -ENOMEM;
 				goto return_func;
 			}
-			OTZ_DBG("Allocate enc_context->ker_req_data_addr: %dB",
+			pr_debug("Allocate enc_context->ker_req_data_addr: %dB",
 					sizeof(enc_context->ker_req_data_addr));
 		}
-		TDEBUG("append encode data\n");
+		pr_debug("append encode data\n");
 		/* TODO: Look at OTZ_1K_SIZE and see if we can increment it */
 		if ((enc_context->enc_req_offset + enc->len <= OTZ_1K_SIZE) &&
 			(enc_context->enc_req_pos < OTZ_MAX_REQ_PARAMS)) {
@@ -901,7 +901,7 @@ static int __otz_client_encode_array(void *private_data,
 						enc_context->enc_req_offset,
 						enc->data,
 						enc->len)) {
-					TERR("copy from user failed");
+					pr_err("copy from user failed");
 					ret = -EFAULT;
 					goto return_func;
 				}
@@ -911,7 +911,7 @@ static int __otz_client_encode_array(void *private_data,
 					enc->data,
 					enc->len);
 			} else {
-				TERR("encode array: unknown address space");
+				pr_err("encode array: unknown address space");
 				goto return_func;
 			}
 
@@ -930,11 +930,11 @@ static int __otz_client_encode_array(void *private_data,
 			enc_context->ker_res_data_addr = kmalloc(OTZ_1K_SIZE,
 					GFP_KERNEL);
 			if (!enc_context->ker_res_data_addr) {
-				TERR("kmalloc failed");
+				pr_err("kmalloc failed");
 				ret = -ENOMEM;
 				goto return_func;
 			}
-			OTZ_DBG("Allocate enc_context->ker_res_data_addr: %dB",
+			pr_debug("Allocate enc_context->ker_res_data_addr: %dB",
 					sizeof(enc_context->ker_res_data_addr));
 		}
 
@@ -969,14 +969,14 @@ static int otz_client_encode_array(void *private_data, void *argp)
 	int ret = 0;
 
 	if (copy_from_user(&enc, argp, sizeof(enc))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
 
 	ret = __otz_client_encode_array(private_data, &enc, OTZ_USER_SPACE);
 	if (ret) {
-		TERR("otz_client error encoding array space");
+		pr_err("otz_client error encoding array space");
 		if (ret == -ENOMEM || ret == -EFAULT)
 			goto ret_encode_array;
 		else
@@ -985,7 +985,7 @@ static int otz_client_encode_array(void *private_data, void *argp)
 
 ret_encode_array:
 	if (copy_to_user(argp, &enc, sizeof(enc))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		return -EFAULT;
 	}
 
@@ -1027,19 +1027,19 @@ static int otz_client_decode_uint32(void *private_data, void *argp)
 	int ret = 0;
 
 	if (copy_from_user(&dec, argp, sizeof(dec))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
 
 	ret = __otz_client_decode_uint32(private_data, &dec);
 	if (ret) {
-		TERR("otz_client error decoding uint32");
+		pr_err("otz_client error decoding uint32");
 		goto return_func;
 	}
 
 	if (copy_to_user(argp, &dec, sizeof(dec))) {
-		TERR("copy to user failed");
+		pr_err("copy to user failed");
 		return -EFAULT;
 	}
 
@@ -1072,7 +1072,7 @@ static void otz_encode_uint32(struct otz_operation_t *ps_operation,
 		ps_operation->enc_dec.enc_error_state = OTZ_ERROR_ENCODE_MEMORY;
 		ps_operation->s_errno = ret;
 	} else {
-		OTZ_DBG("Encode UINT32 succeded");
+		pr_debug("Encode UINT32 succeded");
 		ps_operation->enc_dec.encode_id = enc.encode_id;
 	}
 
@@ -1175,7 +1175,7 @@ static int __otz_client_decode_array_space(void *private_data,
 				if (copy_to_user(dec->data,
 						dec_context->ker_res_data_addr + dec_context->dec_offset,
 						dec_context->meta[dec_context->dec_res_pos].ret_len)){
-					TERR("copy from user failed while copying array");
+					pr_err("copy from user failed while copying array");
 					ret = -EFAULT;
 					goto return_func;
 				}
@@ -1184,11 +1184,11 @@ static int __otz_client_decode_array_space(void *private_data,
 					dec_context->ker_res_data_addr + dec_context->dec_offset,
 					dec_context->meta[dec_context->dec_res_pos].ret_len);
 			} else {
-				TERR("decode array: unknown address space");
+				pr_err("decode array: unknown address space");
 				goto return_func;
 			}
 		} else {
-			TERR("buffer length is small. Length required %d \
+			pr_err("buffer length is small. Length required %d \
 				and supplied length %d",
 				dec_context->meta[dec_context->dec_res_pos].ret_len,
 				dec_context->meta[dec_context->dec_res_pos].len);
@@ -1208,7 +1208,7 @@ static int __otz_client_decode_array_space(void *private_data,
 			dec->data =
 				(void *)dec_context->meta[dec_context->dec_res_pos].usr_addr;
 		} else {
-			TERR("buffer length is small. Length required %d \
+			pr_err("buffer length is small. Length required %d \
 				and supplied length %d\n",
 				dec_context->meta[dec_context->dec_res_pos].ret_len,
 				dec_context->meta[dec_context->dec_res_pos].len);
@@ -1220,7 +1220,7 @@ static int __otz_client_decode_array_space(void *private_data,
 		dec_context->dec_offset += sizeof(u32);
 		dec_context->dec_res_pos++;
 	} else {
-		TERR("invalid data type or decoder at wrong position");
+		pr_err("invalid data type or decoder at wrong position");
 		ret = -EINVAL;
 		goto return_func;
 	}
@@ -1293,19 +1293,19 @@ static int otz_client_session_open(void *private_data, void *argp)
 	u32 dev_file_id = (u32)private_data;
 
 	if (copy_from_user(&ses_open, argp, sizeof(ses_open))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret_val =  -EFAULT;
 		goto return_func;
 	}
 
 	ret_val = __otz_client_session_open(dev_file_id, &ses_open, ses_new);
 	if (ret_val) {
-		TERR("failed to open session");
+		pr_err("failed to open session");
 		goto return_func;
 	}
 
 	if (copy_to_user(argp, &ses_open, sizeof(ses_open))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret_val =  -EFAULT;
 		goto clean_hdr_buf;
 	}
@@ -1314,7 +1314,7 @@ static int otz_client_session_open(void *private_data, void *argp)
 
 clean_hdr_buf:
 	list_del(&ses_new->head);
-	OTZ_DBG("Freeing ses_new in clean_hdr_buf: %dB", sizeof(ses_new));
+	pr_debug("Freeing ses_new in clean_hdr_buf: %dB", sizeof(ses_new));
 	kfree(ses_new);
 
 return_func:
@@ -1329,7 +1329,7 @@ static int __otz_client_session_close(u32 dev_file_id,
 	struct otz_session *temp_ses;
 	int ret_val = 0;
 
-	OTZ_DBG("Closing session");
+	pr_debug("Closing session");
 	list_for_each_entry(temp_dev_file, &otzc_dev_file_head.dev_file_list,
 			head) {
 		if (temp_dev_file->dev_file_id == dev_file_id) {
@@ -1367,14 +1367,14 @@ static int otz_client_session_close(void *private_data, void *argp)
 	u32 dev_file_id = (u32)private_data;
 
 	if (copy_from_user(&ses_close, argp, sizeof(ses_close))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret_val = -EFAULT;
 		goto return_func;
 	}
 
 	ret_val = __otz_client_session_close(dev_file_id, &ses_close);
 	if (ret_val) {
-		TERR("failed to close session");
+		pr_err("failed to close session");
 		goto return_func;
 	}
 
@@ -1402,26 +1402,26 @@ static void *kernel_mmap(u32 dev_file_id, uint32_t length)
 	u32 *alloc_addr;
 	struct otz_dev_file *temp_dev_file;
 
-	OTZ_DBG("Inside kernel_mmap. Length:%d", length);
+	pr_debug("Inside kernel_mmap. Length:%d", length);
 
 	alloc_addr = kmalloc(length, GFP_KERNEL);
 	if (!alloc_addr) {
-		TERR("get free pages failed");
+		pr_err("get free pages failed");
 		return NULL;
 		/* TODO: Look into this to return the right return value */
 		/* ret = -ENOMEM; */
 		/* goto return_func; */
 	}
-	OTZ_DBG("kernel_mmap k_addr %p", alloc_addr);
+	pr_debug("kernel_mmap k_addr %p", alloc_addr);
 
 	mem_new = kmalloc(sizeof(struct otz_shared_mem), GFP_KERNEL);
 	if (!mem_new) {
-		TERR("kmalloc failed");
+		pr_err("kmalloc failed");
 		return NULL;
 		/* ret = -ENOMEM; */
 		/* goto return_func; */
 	}
-	OTZ_DBG("Allocate mem_new: %dB", sizeof(mem_new));
+	pr_debug("Allocate mem_new: %dB", sizeof(mem_new));
 
 	mem_new->k_addr = alloc_addr;
 	mem_new->len = length;
@@ -1458,11 +1458,11 @@ static int otz_client_mmap(struct file *filp, struct vm_area_struct *vma)
 	alloc_addr =  (void *) __get_free_pages(GFP_KERNEL,
 			get_order(ROUND_UP(length, SZ_4K)));
 	if (!alloc_addr) {
-		TERR("get free pages failed");
+		pr_err("get free pages failed");
 		ret = -ENOMEM;
 		goto return_func;
 	}
-	TDEBUG("mmap k_addr %p", alloc_addr);
+	pr_debug("mmap k_addr %p", alloc_addr);
 
 	if (remap_pfn_range(vma, vma->vm_start,
 				((virt_to_phys(alloc_addr)) >> PAGE_SHIFT),
@@ -1473,11 +1473,11 @@ static int otz_client_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	mem_new = kmalloc(sizeof(struct otz_shared_mem), GFP_KERNEL);
 	if (!mem_new) {
-		TERR("kmalloc failed");
+		pr_err("kmalloc failed");
 		ret = -ENOMEM;
 		goto return_func;
 	}
-	OTZ_DBG("Allocate mem_new: %dB", sizeof(mem_new));
+	pr_debug("Allocate mem_new: %dB", sizeof(mem_new));
 
 	mem_new->k_addr = alloc_addr;
 	mem_new->len = length;
@@ -1512,10 +1512,10 @@ static int otz_client_kernel_send_cmd(void *private_data, void *argp)
 	struct otz_encode *enc_temp;
 	int enc_found = 0;
 
-	TDEBUG("enc id %d", enc->encode_id);
-	TDEBUG("dev file id %d", dev_file_id);
-	TDEBUG("ser id %d", enc->service_id);
-	TDEBUG("ses id %d", enc->session_id);
+	pr_debug("enc id %d", enc->encode_id);
+	pr_debug("dev file id %d", dev_file_id);
+	pr_debug("ser id %d", enc->service_id);
+	pr_debug("ses id %d", enc->session_id);
 
 	/* TODO: This needs to be refactored*/
 	list_for_each_entry(temp_dev_file, &otzc_dev_file_head.dev_file_list,
@@ -1523,18 +1523,18 @@ static int otz_client_kernel_send_cmd(void *private_data, void *argp)
 		if (temp_dev_file->dev_file_id == dev_file_id) {
 			list_for_each_entry(temp_svc, &temp_dev_file->services_list, head) {
 				if (temp_svc->service_id == enc->service_id) {
-					TDEBUG("send cmd ser id %d", temp_svc->service_id);
+					pr_debug("send cmd ser id %d", temp_svc->service_id);
 					list_for_each_entry(temp_ses, &temp_svc->sessions_list,
 							head) {
 						if (temp_ses->session_id
 								== enc->session_id) {
-							TDEBUG("send cmd ses id %d",
+							pr_debug("send cmd ses id %d",
 									temp_ses->session_id);
 							if (enc->encode_id != -1) {
 								list_for_each_entry(enc_temp,
 										&temp_ses->encode_list, head) {
 									if (enc_temp->encode_id == enc->encode_id) {
-										TDEBUG("send cmd enc id 0x%x",
+										pr_debug("send cmd enc id 0x%x",
 												enc_temp->encode_id);
 										enc_found = 1;
 										break;
@@ -1572,11 +1572,11 @@ static int otz_client_kernel_send_cmd(void *private_data, void *argp)
 			&send_cmd_lock);
 
 	if (ret != SMC_SUCCESS) {
-		TERR("send cmd secure call failed");
+		pr_err("send cmd secure call failed");
 		goto return_func;
 	}
 
-	TDEBUG("smc_success");
+	pr_debug("smc_success");
 
 return_func:
 	return ret;
@@ -1592,7 +1592,7 @@ static int otz_client_send_cmd(void *private_data, void *argp)
 	struct otz_client_encode_cmd enc;
 	int ret = 0;
 	if (copy_from_user(&enc, argp, sizeof(enc))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
@@ -1600,7 +1600,7 @@ static int otz_client_send_cmd(void *private_data, void *argp)
 	ret = otz_client_kernel_send_cmd(private_data, &enc);
 	if (ret == 0) {
 		if (copy_to_user(argp, &enc, sizeof(enc))) {
-			TERR("copy to user failed");
+			pr_err("copy to user failed");
 			ret = -EFAULT;
 			goto return_func;
 		}
@@ -1660,13 +1660,13 @@ static int __otz_client_kernel_operation_release(u32 dev_file_id, void *argp)
 
 	if (enc_found && enc_context) {
 		if (enc_context->ker_req_data_addr) {
-			OTZ_DBG("Freeing enc_context->ker_req_data_addr: %dB",
+			pr_debug("Freeing enc_context->ker_req_data_addr: %dB",
 					sizeof(enc_context->ker_req_data_addr));
 			kfree(enc_context->ker_req_data_addr);
 		}
 
 		if (enc_context->ker_res_data_addr) {
-			OTZ_DBG("Freeing enc_context->ker_res_data_addr: %dB",
+			pr_debug("Freeing enc_context->ker_res_data_addr: %dB",
 					sizeof(enc_context->ker_res_data_addr));
 			kfree(enc_context->ker_res_data_addr);
 		}
@@ -1690,14 +1690,14 @@ static int otz_client_operation_release(void *private_data, void *argp)
 	int ret = 0;
 
 	if (copy_from_user(&enc, argp, sizeof(enc))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
 
 	ret = __otz_client_kernel_operation_release(dev_file_id, &enc);
 	if (ret != 0)
-		TERR("Error in release");
+		pr_err("Error in release");
 
 return_func:
 	return ret;
@@ -1727,7 +1727,7 @@ static int otz_client_prepare_encode(void *private_data,
 					list_for_each_entry(temp_ses, &temp_svc->sessions_list,
 							head) {
 						if (temp_ses->session_id == enc->session_id) {
-							TDEBUG("enc cmd ses id %d", temp_ses->session_id);
+							pr_debug("enc cmd ses id %d", temp_ses->session_id);
 							session_found = 1;
 							break;
 						}
@@ -1740,8 +1740,8 @@ static int otz_client_prepare_encode(void *private_data,
 	}
 
 	if (!session_found) {
-		TERR("session not found");
-		TERR("enc_sesid:%d", enc->session_id);
+		pr_err("session not found");
+		pr_err("enc_sesid:%d", enc->session_id);
 		ret = -EINVAL;
 		goto return_func;
 	}
@@ -1758,26 +1758,26 @@ static int otz_client_prepare_encode(void *private_data,
 	if (!enc_found) {
 		enc_context = kmalloc(sizeof(struct otz_encode), GFP_KERNEL);
 		if (!enc_context) {
-			TERR("kmalloc failed");
+			pr_err("kmalloc failed");
 			ret = -ENOMEM;
 			goto return_func;
 		}
-		OTZ_DBG("Allocate enc_context: %dB", sizeof(enc_context));
+		pr_debug("Allocate enc_context: %dB", sizeof(enc_context));
 
 		enc_context->meta = kmalloc(sizeof(struct otzc_encode_meta) *
 				(OTZ_MAX_RES_PARAMS + OTZ_MAX_REQ_PARAMS),
 				GFP_KERNEL);
 
 		if (!enc_context->meta) {
-			TERR("kmalloc failed");
-			OTZ_DBG("Freeing enc_context: %dB",
+			pr_err("kmalloc failed");
+			pr_debug("Freeing enc_context: %dB",
 					sizeof(enc_context));
 			kfree(enc_context);
 			ret = -ENOMEM;
 			goto return_func;
 		}
 
-		OTZ_DBG("Allocate enc_context->meta: %dB",
+		pr_debug("Allocate enc_context->meta: %dB",
 				sizeof(enc_context->meta));
 
 		enc_context->encode_id = (int)enc_context;
@@ -1841,7 +1841,7 @@ static int __otz_client_kernel_encode_mem_ref(void *private_data, void *argp)
 
 		list_for_each_entry(temp_shared_mem,
 				&temp_dev_file->dev_shared_mem_head.shared_mem_list, head) {
-			TDEBUG("dev id : %d shrd_mem_index : 0x%d",
+			pr_debug("dev id : %d shrd_mem_index : 0x%d",
 					temp_dev_file->dev_file_id,
 					(int *)temp_shared_mem->index);
 			if (temp_shared_mem->index == (u32 *)enc->data) {
@@ -1852,7 +1852,7 @@ static int __otz_client_kernel_encode_mem_ref(void *private_data, void *argp)
 	}
 
 	if (!shared_mem_found) {
-		TERR("shared memory not registered for this session %d",
+		pr_err("shared memory not registered for this session %d",
 				session->session_id);
 		ret = -EINVAL;
 		goto return_func;
@@ -1863,11 +1863,11 @@ static int __otz_client_kernel_encode_mem_ref(void *private_data, void *argp)
 			enc_context->ker_req_data_addr = kmalloc(OTZ_1K_SIZE,
 					GFP_KERNEL);
 			if (!enc_context->ker_req_data_addr) {
-				TERR("kmalloc failed");
+				pr_err("kmalloc failed");
 				ret = -ENOMEM;
 				goto ret_encode_array;
 			}
-			OTZ_DBG("Allocate enc_context->ker_req_data_addr: %dB",
+			pr_debug("Allocate enc_context->ker_req_data_addr: %dB",
 					sizeof(enc_context->ker_req_data_addr));
 		}
 
@@ -1892,11 +1892,11 @@ static int __otz_client_kernel_encode_mem_ref(void *private_data, void *argp)
 			enc_context->ker_res_data_addr = kmalloc(OTZ_1K_SIZE,
 					GFP_KERNEL);
 			if (!enc_context->ker_res_data_addr) {
-				TERR("kmalloc failed");
+				pr_err("kmalloc failed");
 				ret = -ENOMEM;
 				goto ret_encode_array;
 			}
-			OTZ_DBG("Allocate enc_context->ker_res_data_addr: %dB",
+			pr_debug("Allocate enc_context->ker_res_data_addr: %dB",
 					sizeof(enc_context->ker_res_data_addr));
 		}
 
@@ -1930,7 +1930,7 @@ static int otz_client_encode_mem_ref(void *private_data, void *argp)
 	int ret = 0;
 
 	if (copy_from_user(&enc, argp, sizeof(enc))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
@@ -1938,7 +1938,7 @@ static int otz_client_encode_mem_ref(void *private_data, void *argp)
 	ret = __otz_client_kernel_encode_mem_ref(private_data, &enc);
 	if (enc.encode_id != -1) {
 		if (copy_to_user(argp, &enc, sizeof(enc))) {
-			TERR("copy from user failed");
+			pr_err("copy from user failed");
 			return -EFAULT;
 		}
 	}
@@ -1968,7 +1968,7 @@ static int otz_client_kernel_decode_array_space(void *private_data, void *argp)
 			dec->data =
 				(void *)dec_context->meta[dec_context->dec_res_pos].usr_addr;
 		} else {
-			TERR("buffer length is small. Length required %d \
+			pr_err("buffer length is small. Length required %d \
 				and supplied length %d",
 				dec_context->meta[dec_context->dec_res_pos].ret_len,
 				dec_context->meta[dec_context->dec_res_pos].len);
@@ -1980,7 +1980,7 @@ static int otz_client_kernel_decode_array_space(void *private_data, void *argp)
 		dec_context->dec_offset += sizeof(u32);
 		dec_context->dec_res_pos++;
 	} else {
-		TERR("invalid data type or decoder at wrong position");
+		pr_err("invalid data type or decoder at wrong position");
 		ret = -EINVAL;
 		goto return_func;
 	}
@@ -1995,7 +1995,7 @@ static int otz_client_decode_array_space(void *private_data, void *argp)
 	int ret = 0;
 
 	if (copy_from_user(&dec, argp, sizeof(dec))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
@@ -2003,12 +2003,12 @@ static int otz_client_decode_array_space(void *private_data, void *argp)
 	ret = __otz_client_decode_array_space(private_data, &dec,
 			OTZ_USER_SPACE);
 	if (ret) {
-		TERR("otz_client error decoding array space");
+		pr_err("otz_client error decoding array space");
 		goto return_func;
 	}
 
 	if (copy_to_user(argp, &dec, sizeof(dec))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
@@ -2024,7 +2024,7 @@ static int otz_client_get_decode_type(void *private_data, void *argp)
 	struct otz_encode *dec_context;
 
 	if (copy_from_user(&dec, argp, sizeof(dec))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
@@ -2033,7 +2033,7 @@ static int otz_client_get_decode_type(void *private_data, void *argp)
 	if (ret)
 		goto return_func;
 
-	TDEBUG("decoder pos 0x%x and encoder pos 0x%x",
+	pr_debug("decoder pos 0x%x and encoder pos 0x%x",
 			dec_context->dec_res_pos, dec_context->enc_res_pos);
 
 	if (dec_context->dec_res_pos <= dec_context->enc_res_pos)
@@ -2044,7 +2044,7 @@ static int otz_client_get_decode_type(void *private_data, void *argp)
 	}
 
 	if (copy_to_user(argp, &dec, sizeof(dec))) {
-		TERR("copy to user failed");
+		pr_err("copy to user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
@@ -2088,7 +2088,7 @@ static int otz_client_kernel_shared_mem_alloc(void *private_data, void *argp,
 	}
 
 	if (!session_found) {
-		TERR("Session not found!!");
+		pr_err("Session not found!!");
 		ret = -1;
 		return ret;
 	}
@@ -2107,7 +2107,7 @@ static int __otz_client_shared_mem_alloc(u32 dev_file_id,
 	int  session_found = 0;
 	int ret = 0;
 
-	OTZ_DBG("service id %d session id %d user mem addr %p",
+	pr_debug("service id %d session id %d user mem addr %p",
 			mem_info->service_id,
 			mem_info->session_id,
 			mem_info->user_mem_addr);
@@ -2133,7 +2133,7 @@ static int __otz_client_shared_mem_alloc(u32 dev_file_id,
 	}
 
 	if (!session_found) {
-		TERR("session not found");
+		pr_err("session not found");
 		ret = -EINVAL;
 		goto return_func;
 	}
@@ -2167,7 +2167,7 @@ static int otz_client_shared_mem_alloc(void *private_data, void *argp)
 	int ret = 0;
 
 	if (copy_from_user(&mem_info, argp, sizeof(mem_info))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret = -EFAULT;
 		goto return_func;
 	}
@@ -2188,7 +2188,7 @@ static int __otz_client_shared_mem_free(u32 dev_file_id,
 	int  session_found = 0;
 	int ret = 0;
 
-	TDEBUG("service id 0x%x session id 0x%x user mem addr 0x%x",
+	pr_debug("service id 0x%x session id 0x%x user mem addr 0x%x",
 			mem_info->service_id,
 			mem_info->session_id,
 			mem_info->user_mem_addr);
@@ -2213,7 +2213,7 @@ static int __otz_client_shared_mem_free(u32 dev_file_id,
 	}
 
 	if (!session_found) {
-		TERR("session not found");
+		pr_err("session not found");
 		ret = -EINVAL;
 		goto return_func;
 	}
@@ -2227,7 +2227,7 @@ static int __otz_client_shared_mem_free(u32 dev_file_id,
 					SZ_4K)));
 
 			if (temp_shared_mem) {
-				OTZ_DBG("Freeing temp_shared_mem: %dB",
+				pr_debug("Freeing temp_shared_mem: %dB",
 						sizeof(temp_shared_mem));
 				kfree(temp_shared_mem);
 			}
@@ -2246,14 +2246,14 @@ static int otz_client_shared_mem_free(void *private_data, void *argp)
 	u32 dev_file_id = (u32)private_data;
 
 	if (copy_from_user(&mem_info, argp, sizeof(mem_info))) {
-		TERR("copy from user failed");
+		pr_err("copy from user failed");
 		ret_val = -EFAULT;
 		goto return_func;
 	}
 
 	ret_val = __otz_client_shared_mem_free(dev_file_id, &mem_info);
 	if (ret_val) {
-		TERR("failed to free shared memory");
+		pr_err("failed to free shared memory");
 		goto return_func;
 	}
 
@@ -2276,7 +2276,7 @@ struct otz_client_encode_cmd *prep_enc_struct(struct otz_client_im_check *im,
 	if (!enc)
 		return NULL;
 
-	OTZ_DBG("Allocate enc: %dB", sizeof(enc));
+	pr_debug("Allocate enc: %dB", sizeof(enc));
 
 	enc->encode_id = im->encode_id;
 	enc->session_id = im->session_id;
@@ -2287,7 +2287,7 @@ struct otz_client_encode_cmd *prep_enc_struct(struct otz_client_im_check *im,
 			get_order(ROUND_UP(size, SZ_4K)));
 
 	if (!(enc->data)) {
-		TERR("Unable to allocate space");
+		pr_err("Unable to allocate space");
 		return NULL;
 	}
 	memcpy(enc->data, (void *)data, size);
@@ -2307,7 +2307,7 @@ static int otz_client_enc(struct file *file, struct otz_client_encode_cmd *enc)
 	ret = __otz_client_kernel_encode_mem_ref(file->private_data, enc);
 	mutex_unlock(&encode_cmd_lock);
 	if (ret) {
-		TDEBUG("failed otz_client_encode_cmd: %d", ret);
+		pr_debug("failed otz_client_encode_cmd: %d", ret);
 		return -1;
 	}
 	return 0;
@@ -2329,19 +2329,19 @@ static struct otz_client_encode_cmd *encode_helper(struct file *file,
 
 	enc = prep_enc_struct(im, size, flag, param_type, (void *)data);
 	if (!enc) {
-		TERR("failed to prep_enc_struct");
+		pr_err("failed to prep_enc_struct");
 		return NULL;
 	}
-	TDEBUG("service id is %d and cmd id is"
+	pr_debug("service id is %d and cmd id is"
 			"%d session id is"
 			"%d", enc->service_id, enc->cmd_id, enc->session_id);
 	mem_new = kmalloc(sizeof(struct otz_shared_mem), GFP_KERNEL);
 
 	if (!mem_new) {
-		TERR("Insufficient memory");
+		pr_err("Insufficient memory");
 		return NULL;
 	}
-	OTZ_DBG("Allocate mem_new: %dB", sizeof(mem_new));
+	pr_debug("Allocate mem_new: %dB", sizeof(mem_new));
 
 	mem_new->k_addr = enc->data;
 	mem_new->len = size;
@@ -2358,7 +2358,7 @@ static struct otz_client_encode_cmd *encode_helper(struct file *file,
 
 	ret = otz_client_enc(file, enc);
 	if (ret == -1) {
-		TERR("otz_client_enc failed");
+		pr_err("otz_client_enc failed");
 		return NULL;
 	}
 
@@ -2375,14 +2375,14 @@ static int get_kernel_text_hash(void)
 	char *hash = NULL;
 	buffer = kmalloc(KERN_TEXT_SIZE + 1 , GFP_KERNEL);
 	if (!buffer) {
-		TERR("Unable to malloc,  try vmalloc()");
+		pr_err("Unable to malloc,  try vmalloc()");
 		buffer = vmalloc(KERN_TEXT_SIZE + 1);
 		if (!buffer) {
-			TERR("kernel.text section alloc. failed for vmalloc\n");
+			pr_err("kernel.text section alloc. failed for vmalloc\n");
 			return NULL;
 		}
 	}
-	OTZ_DBG("Allocate buffer: %dB", sizeof(buffer));
+	pr_debug("Allocate buffer: %dB", sizeof(buffer));
 	memcpy(buffer, kernel_text_start, KERN_TEXT_SIZE);
 	buffer[KERN_TEXT_SIZE] = 0x0;
 	hash = find_md5_hash(buffer);
@@ -2410,7 +2410,7 @@ static int check_kernel_integrity(struct file *file,
 
 	enc = encode_helper(file, im, size, 0x0, OTZC_PARAM_IN, (void *)hash);
 	if (enc == NULL) {
-		TERR("failed in encode_data");
+		pr_err("failed in encode_data");
 		ret = -1;
 		goto ret_func;
 	}
@@ -2421,7 +2421,7 @@ static int check_kernel_integrity(struct file *file,
 	enc->param_type = 1;
 	ret = otz_client_enc(file, enc);
 	if (ret == -1) {
-		TERR("failed to encode data again");
+		pr_err("failed to encode data again");
 		ret = -1;
 		goto ret_func;
 	}
@@ -2431,7 +2431,7 @@ static int check_kernel_integrity(struct file *file,
 	mutex_unlock(&send_cmd_lock);
 
 	if (ret) {
-		TDEBUG("failed otz_client_send_cmd: %d", ret);
+		pr_debug("failed otz_client_send_cmd: %d", ret);
 		ret = -1;
 		goto ret_func;
 	}
@@ -2440,7 +2440,7 @@ static int check_kernel_integrity(struct file *file,
 	mutex_unlock(&decode_cmd_lock);
 
 	if (ret) {
-		TDEBUG("failed otz_client_decode_cmd: %d", ret);
+		pr_debug("failed otz_client_decode_cmd: %d", ret);
 		ret = -1;
 		goto ret_func;
 	}
@@ -2448,13 +2448,13 @@ static int check_kernel_integrity(struct file *file,
 
 	ret = __otz_client_kernel_operation_release(dev_file_id, enc);
 	if (ret) {
-		TERR("failed operation release: %d", ret);
+		pr_err("failed operation release: %d", ret);
 		ret = -1;
 		goto ret_func;
 	}
 
 	if (enc) {
-		OTZ_DBG("Freeing enc: %dB", sizeof(enc));
+		pr_debug("Freeing enc: %dB", sizeof(enc));
 		kfree(enc);
 		enc = NULL;
 	}
@@ -2471,7 +2471,7 @@ static long otz_client_im_helper(struct file *file, void *argp)
 
 	ret = check_kernel_integrity(file, im);
 	if (ret == -1) {
-		TERR("IM command failed");
+		pr_err("IM command failed");
 		ret = -1;
 		goto ret_func;
 	}
@@ -2492,7 +2492,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_send_cmd(file->private_data, argp);
 		mutex_unlock(&send_cmd_lock);
 		if (ret)
-			TERR("failed otz_client_send_cmd: %d", ret);
+			pr_err("failed otz_client_send_cmd: %d", ret);
 		break;
 #ifdef CONFIG_KIM
 	case OTZ_CLIENT_IOCTL_IM_CHECK: {
@@ -2500,7 +2500,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_im_helper(file, argp);
 		mutex_unlock(im_check_lock);
 		if (ret == -1)
-			TERR("failed IM_CHECK");
+			pr_err("failed IM_CHECK");
 		return ret;
 	}
 #endif
@@ -2509,7 +2509,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_encode_uint32(file->private_data, argp);
 		mutex_unlock(&encode_cmd_lock);
 		if (ret)
-			TERR("failed otz_client_encode_cmd: %d", ret);
+			pr_err("failed otz_client_encode_cmd: %d", ret);
 		break;
 	}
 
@@ -2518,7 +2518,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_decode_uint32(file->private_data, argp);
 		mutex_unlock(&decode_cmd_lock);
 		if (ret)
-			TERR("failed otz_client_decode_cmd: %d", ret);
+			pr_err("failed otz_client_decode_cmd: %d", ret);
 		break;
 	}
 
@@ -2527,7 +2527,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_encode_array(file->private_data, argp);
 		mutex_unlock(&encode_cmd_lock);
 		if (ret)
-			TERR("failed otz_client_encode_cmd: %d", ret);
+			pr_err("failed otz_client_encode_cmd: %d", ret);
 		break;
 	}
 
@@ -2536,7 +2536,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_decode_array_space(file->private_data, argp);
 		mutex_unlock(&decode_cmd_lock);
 		if (ret)
-			TERR("failed otz_client_decode_cmd: %d", ret);
+			pr_err("failed otz_client_decode_cmd: %d", ret);
 		break;
 	}
 
@@ -2545,7 +2545,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_encode_mem_ref(file->private_data, argp);
 		mutex_unlock(&encode_cmd_lock);
 		if (ret)
-			TERR("failed otz_client_encode_cmd: %d", ret);
+			pr_err("failed otz_client_encode_cmd: %d", ret);
 		break;
 	}
 
@@ -2554,7 +2554,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_encode_mem_ref(file->private_data, argp);
 		mutex_unlock(&encode_cmd_lock);
 		if (ret)
-			TERR("failed otz_client_encode_cmd: %d", ret);
+			pr_err("failed otz_client_encode_cmd: %d", ret);
 		break;
 	}
 
@@ -2563,7 +2563,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_get_decode_type(file->private_data, argp);
 		mutex_unlock(&decode_cmd_lock);
 		if (ret)
-			TERR("failed otz_client_decode_cmd: %d", ret);
+			pr_err("failed otz_client_decode_cmd: %d", ret);
 		break;
 	}
 
@@ -2572,7 +2572,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_session_open(file->private_data, argp);
 		mutex_unlock(&ses_open_lock);
 		if (ret)
-			TERR("failed otz_client_session_open: %d", ret);
+			pr_err("failed otz_client_session_open: %d", ret);
 		break;
 	}
 
@@ -2581,7 +2581,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_session_close(file->private_data, argp);
 		mutex_unlock(&ses_close_lock);
 		if (ret)
-			TERR("failed otz_client_session_close: %d", ret);
+			pr_err("failed otz_client_session_close: %d", ret);
 		break;
 	}
 
@@ -2590,7 +2590,7 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_shared_mem_alloc(file->private_data, argp);
 		mutex_unlock(&mem_alloc_lock);
 		if (ret)
-			TERR("failed otz_client_shared_mem_alloc: %d", ret);
+			pr_err("failed otz_client_shared_mem_alloc: %d", ret);
 		break;
 	}
 
@@ -2599,14 +2599,14 @@ static long otz_client_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		ret = otz_client_shared_mem_free(file->private_data, argp);
 		mutex_unlock(&mem_free_lock);
 		if (ret)
-			TERR("failed otz_client_shared_mem_free: %d", ret);
+			pr_err("failed otz_client_shared_mem_free: %d", ret);
 		break;
 	}
 
 	case OTZ_CLIENT_IOCTL_OPERATION_RELEASE: {
 		ret = otz_client_operation_release(file->private_data, argp);
 		if (ret)
-			TDEBUG("failed operation release: %d", ret);
+			pr_debug("failed operation release: %d", ret);
 		break;
 	}
 
@@ -2625,12 +2625,12 @@ static int __otz_open_device(u32 *device_id)
 
 	new_dev = kmalloc(sizeof(struct otz_dev_file), GFP_KERNEL);
 	if (!new_dev) {
-		TERR("kmalloc failed for new dev file allocation\n");
+		pr_err("kmalloc failed for new dev file allocation\n");
 		ret = -ENOMEM;
 		goto ret_func;
 	}
 
-	OTZ_DBG("Allocate new_dev: %dB", sizeof(new_dev));
+	pr_debug("Allocate new_dev: %dB", sizeof(new_dev));
 	new_dev->dev_file_id = device_file_cnt;
 	new_dev->service_cnt = 0;
 
@@ -2688,12 +2688,12 @@ static int __otz_open_device(u32 *device_id)
 				GFP_KERNEL);
 
 		if (!notify_data) {
-			TERR("kmalloc failed for notification data\n");
+			pr_err("kmalloc failed for notification data\n");
 			ret = -ENOMEM;
 			goto ret_func;
 		}
 
-		OTZ_DBG("Allocate notify_data: %dB\n", sizeof(notify_data));
+		pr_debug("Allocate notify_data: %dB\n", sizeof(notify_data));
 	}
 
 	ret = otz_smc_call(new_dev->dev_file_id, OTZ_SVC_GLOBAL,
@@ -2702,7 +2702,7 @@ static int __otz_open_device(u32 *device_id)
 			NULL, NULL, NULL, NULL);
 
 	if (ret != SMC_SUCCESS) {
-		TERR("Shared memory registration for \
+		pr_err("Shared memory registration for \
 				secure world notification failed");
 		goto ret_func;
 	}
@@ -2723,17 +2723,17 @@ static int __otz_close_device(u32 dev_file_id)
 			0, 0, NULL, 0, NULL, 0, NULL, NULL, NULL, NULL);
 
 	if (ret != SMC_SUCCESS) {
-		TERR("Shared memory un-registration for \
+		pr_err("Shared memory un-registration for \
 				secure world notification failed");
 	}
 #endif
 
-	OTZ_DBG("otz_client_release: %d", dev_file_id);
+	pr_debug("otz_client_release: %d", dev_file_id);
 	otz_client_service_exit(dev_file_id);
 
 	if (list_empty(&otzc_dev_file_head.dev_file_list)) {
 #ifdef OTZONE_ASYNC_NOTIFY_SUPPORT
-		OTZ_DBG("Freeing notify_data: %dB", sizeof(notify_data));
+		pr_debug("Freeing notify_data: %dB", sizeof(notify_data));
 		kfree(notify_data);
 		notify_data = NULL;
 #endif
@@ -2795,7 +2795,7 @@ static otz_return_t __otz_operation_prepare_open(struct otz_device_t *ps_device,
 {
 	if (ps_device == NULL || pks_service == OTZ_SVC_INVALID ||
 			ps_session == NULL || ps_operation == NULL) {
-		TERR("otz operation prepare open : Illegal argument\n");
+		pr_err("otz operation prepare open : Illegal argument\n");
 		return OTZ_ERROR_ILLEGAL_ARGUMENT;
 	}
 
@@ -2819,17 +2819,17 @@ static otz_return_t __otz_operation_prepare_close(
 		struct otz_operation_t *ps_operation)
 {
 	if (ps_session == NULL || ps_operation == NULL) {
-		TERR("otz operation prepare close : Illegal argument");
+		pr_err("otz operation prepare close : Illegal argument");
 		return OTZ_ERROR_ILLEGAL_ARGUMENT;
 	}
 
 	if (ps_session->ui_state != OTZ_STATE_OPEN) {
-		TERR("otz operation prepare close : Illegal state");
+		pr_err("otz operation prepare close : Illegal state");
 		return OTZ_ERROR_ILLEGAL_STATE;
 	}
 
 	if (ps_operation->ui_state != OTZ_STATE_UNDEFINED) {
-		TERR("otz operation prepare close : Illegal state");
+		pr_err("otz operation prepare close : Illegal state");
 		return OTZ_ERROR_ILLEGAL_STATE;
 	}
 
@@ -2856,12 +2856,12 @@ static otz_return_t __otz_operation_prepare_invoke(
 		struct otz_operation_t *ps_operation)
 {
 	if (ps_session == NULL || ps_operation == NULL) {
-		TERR("otz operation prepare invoke: Illegal argument");
+		pr_err("otz operation prepare invoke: Illegal argument");
 		return OTZ_ERROR_ILLEGAL_ARGUMENT;
 	}
 
 	if (ps_session->ui_state != OTZ_STATE_OPEN) {
-		TERR("otz operation prepare invoke: Illegal state (%d)",
+		pr_err("otz operation prepare invoke: Illegal state (%d)",
 				ps_session->ui_state);
 		return OTZ_ERROR_ILLEGAL_STATE;
 	}
@@ -2899,7 +2899,7 @@ static int __otz_free_temp_shared_mem(struct otz_operation_t *ps_operation)
 		up_write(&mm->mmap_sem);
 
 		if (ret) {
-			TERR("otz do_munmap failed");
+			pr_err("otz do_munmap failed");
 			ps_operation->s_errno = ret;
 			return ret;
 		}
@@ -2907,7 +2907,7 @@ static int __otz_free_temp_shared_mem(struct otz_operation_t *ps_operation)
 		ret = __otz_client_shared_mem_free(
 				ps_operation->session->device.fd, &mem_info);
 		if (ret) {
-			TERR("otz free shared memory failed");
+			pr_err("otz free shared memory failed");
 			ps_operation->s_errno = ret;
 			return ret;
 		}
@@ -2940,13 +2940,13 @@ static otz_return_t otz_operation_perform(struct otz_operation_t *ps_operation,
 	struct otz_session ses_new;
 
 	if (ps_operation == NULL || pui_service_return == NULL) {
-		TERR("operation_perform : Illegal argument");
+		pr_err("operation_perform : Illegal argument");
 		return OTZ_ERROR_ILLEGAL_ARGUMENT;
 	}
 
 	if (!(ps_operation->ui_state == OTZ_STATE_ENCODE ||
 			ps_operation->ui_state == OTZ_STATE_PERFORMABLE)) {
-		TERR("operation_perform : Illegal state");
+		pr_err("operation_perform : Illegal state");
 		return OTZ_ERROR_ILLEGAL_STATE;
 	}
 
@@ -2997,7 +2997,7 @@ static otz_return_t otz_operation_perform(struct otz_operation_t *ps_operation,
 			return OTZ_SUCCESS;
 		} else {
 			/* Undefined Behaviour */
-			TERR("Operation_cnt = %d  shared_mem_cnt = %d\n",
+			pr_err("Operation_cnt = %d  shared_mem_cnt = %d\n",
 					ps_operation->session->operation_count,
 					ps_operation->session->shared_mem_cnt);
 
@@ -3072,7 +3072,7 @@ static otz_return_t otz_operation_perform(struct otz_operation_t *ps_operation,
 			return OTZ_ERROR_SERVICE;
 		}
 
-		OTZ_DBG("command succeded\n");
+		pr_debug("command succeded\n");
 		*pui_service_return = OTZ_SUCCESS;
 		ps_operation->ui_state = OTZ_STATE_DECODE;
 		ps_operation->session->ui_state = OTZ_STATE_OPEN;
@@ -3095,7 +3095,7 @@ static int otz_operation_release(struct otz_operation_t *ps_operation)
 	int ret = OTZ_SUCCESS;
 
 	if (ps_operation == NULL) {
-		OTZ_DBG("ps_operation: Null operation");
+		pr_debug("ps_operation: Null operation");
 		ret = -1;
 		goto out;
 	}
@@ -3104,7 +3104,7 @@ static int otz_operation_release(struct otz_operation_t *ps_operation)
 			ps_operation->ui_state == OTZ_STATE_PERFORMABLE ||
 			ps_operation->ui_state == OTZ_STATE_DECODE ||
 			ps_operation->ui_state == OTZ_STATE_INVALID)) {
-		OTZ_DBG("ui_state: Illegal state - Undefined behaviour");
+		pr_debug("ui_state: Illegal state - Undefined behaviour");
 		ret = -1;
 		goto out;
 	}
@@ -3137,7 +3137,7 @@ static int otz_operation_release(struct otz_operation_t *ps_operation)
 		ret = __otz_client_kernel_operation_release(
 				ps_operation->session->device.fd, &enc);
 		if (ret) {
-			TERR("otz_operation_release failed");
+			pr_err("otz_operation_release failed");
 			ps_operation->s_errno = ret;
 			goto out;
 		}
@@ -3146,7 +3146,7 @@ static int otz_operation_release(struct otz_operation_t *ps_operation)
 	ps_operation->session = NULL;
 	ps_operation->ui_state = OTZ_STATE_UNDEFINED;
 	ps_operation->type = OTZ_OPERATION_NONE;
-	OTZ_DBG("Releasing operation succeeded");
+	pr_debug("Releasing operation succeeded");
 
 out:
 	return ret;
@@ -3164,7 +3164,7 @@ static int otz_open_session(int service_id,
 
 	ret = __otz_open_device(&device_id);
 	if (ret) {
-		TERR("otz_open_session failed");
+		pr_err("otz_open_session failed");
 		goto out_error;
 	}
 
@@ -3177,16 +3177,16 @@ static int otz_open_session(int service_id,
 	ret = __otz_operation_prepare_open(&device_otz, service_id, NULL, NULL,
 			&session_otz, &operation_otz);
 	if (ret) {
-		TERR("otz session open prepare failed");
+		pr_err("otz session open prepare failed");
 		goto out_error;
 	}
 
 	ret = otz_operation_perform(&operation_otz, &service_ret);
 	if (ret != OTZ_SUCCESS) {
 		if (ret == OTZ_ERROR_SERVICE)
-			TERR("%s\n", otz_strerror(service_ret));
+			pr_err("%s\n", otz_strerror(service_ret));
 		else
-			TERR("otz session open failed");
+			pr_err("otz session open failed");
 
 		session_otz.ui_state = OTZ_STATE_UNDEFINED;
 		operation_otz.ui_state = OTZ_STATE_INVALID;
@@ -3196,24 +3196,24 @@ static int otz_open_session(int service_id,
 
 	ret = otz_operation_release(&operation_otz);
 	if (ret != OTZ_SUCCESS) {
-		TERR("otz operation release failed");
+		pr_err("otz operation release failed");
 		goto out_error;
 	}
 
 	tz_session->impl_session = kmalloc(sizeof(struct otz_session_t),
 			GFP_KERNEL);
 	if (tz_session->impl_session == NULL) {
-		TERR("kmalloc failed for otz_session_t");
+		pr_err("kmalloc failed for otz_session_t");
 		ret = -ENOMEM;
 		goto out_error;
 	}
 
-	OTZ_DBG("Allocate tz_session->impl_session: %dB",
+	pr_debug("Allocate tz_session->impl_session: %dB",
 			sizeof(tz_session->impl_session));
 	memcpy(tz_session->impl_session, &session_otz,
 			sizeof(struct otz_session_t));
 
-	OTZ_DBG("Return session information:\n \
+	pr_debug("Return session information:\n \
 		\t dev_file_id: %d\n \
 		\t serv id: %d\n \
 		\t ses id: %d\n",
@@ -3236,7 +3236,7 @@ static int otz_close_session(struct trustzone_session *tz_session)
 	session_otz = (struct otz_session_t *)tz_session->impl_session;
 	device_id = session_otz->device.fd;
 
-	OTZ_DBG("Closing session for:\n \
+	pr_debug("Closing session for:\n \
 		\t dev_file_id: %d\n \
 		\t serv id: %d\n \
 		\t ses id: %d\n",
@@ -3248,7 +3248,7 @@ static int otz_close_session(struct trustzone_session *tz_session)
 
 	ret = __otz_operation_prepare_close(session_otz, &operation_otz);
 	if (ret != OTZ_SUCCESS) {
-		TERR("otz session close prepare failed");
+		pr_err("otz session close prepare failed");
 		otz_operation_release(&operation_otz);
 		goto out_error;
 	}
@@ -3256,9 +3256,9 @@ static int otz_close_session(struct trustzone_session *tz_session)
 	ret = otz_operation_perform(&operation_otz, &service_ret);
 	if (ret != OTZ_SUCCESS) {
 		if (ret == OTZ_ERROR_SERVICE)
-			TERR("%s\n", otz_strerror(service_ret));
+			pr_err("%s\n", otz_strerror(service_ret));
 		else
-			TERR("otz session close failed");
+			pr_err("otz session close failed");
 
 		operation_otz.ui_state = OTZ_STATE_INVALID;
 		otz_operation_release(&operation_otz);
@@ -3267,20 +3267,20 @@ static int otz_close_session(struct trustzone_session *tz_session)
 
 	ret = otz_operation_release(&operation_otz);
 	if (ret != OTZ_SUCCESS) {
-		TERR("otz operation release failed");
+		pr_err("otz operation release failed");
 		goto out_error;
 	}
 
 	/* XXX: should this be placed in a separate trustzone operation? */
 	ret = __otz_close_device(device_id);
 	if (ret != OTZ_SUCCESS) {
-		TERR("otz close device failed");
+		pr_err("otz close device failed");
 		goto out_error;
 	}
 
-	OTZ_DBG("Freeing session_otz: %dB", sizeof(session_otz));
+	pr_debug("Freeing session_otz: %dB", sizeof(session_otz));
 	kfree(session_otz);
-	OTZ_DBG("Close session (and device) succeeded\n");
+	pr_debug("Close session (and device) succeeded\n");
 
 out_error:
 	return ret;
@@ -3310,7 +3310,7 @@ static int otz_invoke_command(struct trustzone_session *tz_session,
 
 	session_otz = (struct otz_session_t *)tz_session->impl_session;
 
-	OTZ_DBG("Invoke Command:\n \
+	pr_debug("Invoke Command:\n \
 		\t dev_file_id: %d\n \
 		\t serv id: %d\n \
 		\t ses id: %d\n",
@@ -3322,7 +3322,7 @@ static int otz_invoke_command(struct trustzone_session *tz_session,
 	ret = __otz_operation_prepare_invoke(session_otz, ui_command, NULL,
 			&operation_otz);
 	if (ret != OTZ_SUCCESS) {
-		TERR("otz_invoke_command failed\n");
+		pr_err("otz_invoke_command failed\n");
 		/*
 		 * TODO: Here we need to clean the session if it fails. This
 		 * might have to happen in trustzone.c so that this is at a
@@ -3331,24 +3331,24 @@ static int otz_invoke_command(struct trustzone_session *tz_session,
 	}
 
 	if (params != NULL) {
-		OTZ_DBG("Sending command with %d parameters", params->n_params);
+		pr_debug("Sending command with %d parameters", params->n_params);
 		param = params->params;
 		for (i = 0; i < params->n_params; i++) {
 			if (param->type == TZ_UINT8) {
 				/* TODO */
 			} else if (param->type == TZ_UINT32) {
-				OTZ_DBG("Encode UINT32. val:%d",
+				pr_debug("Encode UINT32. val:%d",
 						*(int *)param->value);
 				otz_encode_uint32(&operation_otz, param->value,
 						param->inout);
 				if (operation_otz.enc_dec.enc_error_state !=
 						OTZ_SUCCESS) {
-					TERR("otz encode failed\n");
+					pr_err("otz encode failed\n");
 					ret = operation_otz.enc_dec.enc_error_state;
 					goto out_release;
 				}
 			} else if (param->type == TZ_GENERIC) {
-				OTZ_DBG("Decode MEMREF (GENERIC)");
+				pr_debug("Decode MEMREF (GENERIC)");
 				otz_encode_array(&operation_otz, param->value,
 						param->size, param->inout);
 				/*
@@ -3370,7 +3370,7 @@ static int otz_invoke_command(struct trustzone_session *tz_session,
 						/* operation_otz.session,
 						 * &shared_mem); */
 				/* if (ret != OTZ_SUCCESS) { */
-					/* TERR("shared memory allocation failed\n"); */
+					/* pr_err("shared memory allocation failed\n"); */
 					/* //TODO: Should we close session here? otzapp does */
 					/* goto out_release; */
 				/* } */
@@ -3382,7 +3382,7 @@ static int otz_invoke_command(struct trustzone_session *tz_session,
 					/* goto out_release; */
 				/* } */
 			} else {
-				TERR("otz_invoke_command wrong parameter type");
+				pr_err("otz_invoke_command wrong parameter type");
 				ret = OTZ_ERROR_ENCODE_FORMAT;
 			}
 
@@ -3397,9 +3397,9 @@ static int otz_invoke_command(struct trustzone_session *tz_session,
 	ret = otz_operation_perform(&operation_otz, &service_ret);
 	if (ret != OTZ_SUCCESS) {
 		if (ret == OTZ_ERROR_SERVICE)
-			TERR("%s\n", otz_strerror(service_ret));
+			pr_err("%s\n", otz_strerror(service_ret));
 		else
-			TERR("otz invoke_command failed\n");
+			pr_err("otz invoke_command failed\n");
 
 		goto out_release;
 	}
@@ -3413,28 +3413,28 @@ static int otz_invoke_command(struct trustzone_session *tz_session,
 				if (param->type == TZ_UINT8) {
 					/* XXX: TODO */
 				} else if (param->type == TZ_UINT32) {
-					OTZ_DBG("Decode UINT32");
+					pr_debug("Decode UINT32");
 					aux = otz_decode_uint32(&operation_otz);
 					param->value = (void *)&aux;
 					if (operation_otz.enc_dec.enc_error_state ==
 							OTZ_SUCCESS) {
-						OTZ_DBG("out data = %d, type: uint32_t",
+						pr_debug("out data = %d, type: uint32_t",
 								*(int *)param->value);
 					} else {
-						TERR("otz_invoke_command decode datafailed\n");
+						pr_err("otz_invoke_command decode datafailed\n");
 						ret = operation_otz.enc_dec.enc_error_state;
 						goto out_release;
 					}
 				} else if (param->type == TZ_GENERIC) {
-					OTZ_DBG("Decode MEMREF (GENERIC)");
+					pr_debug("Decode MEMREF (GENERIC)");
 					param->value = (void *)otz_decode_array_space(
 							&operation_otz, &out_data_len);
 					param->size = (uint32_t)out_data_len;
 					if (operation_otz.enc_dec.enc_error_state == OTZ_SUCCESS) {
-						OTZ_DBG("out data = %s, type: generic",
+						pr_debug("out data = %s, type: generic",
 								(char *)param->value);
 					} else {
-						TERR("otz_invoke_command decode data failed");
+						pr_err("otz_invoke_command decode data failed");
 						ret = operation_otz.enc_dec.enc_error_state;
 						goto out_release;
 					}
@@ -3457,7 +3457,7 @@ out_release:
 	/* XXX:HERE WE NEED TO CLOSE SESSION */
 	otz_operation_release(&operation_otz);
 	if (ret != OTZ_SUCCESS) {
-		TERR("otz operation release failed");
+		pr_err("otz operation release failed");
 		goto out_error;
 	}
 
@@ -3560,7 +3560,7 @@ void otz_encode_memory_reference(struct otz_operation_t *ps_operation,
 	mutex_unlock(&encode_cmd_lock);
 
 	if (ret) {
-		TERR("error encoding kernel mem-ref for device %d",
+		pr_err("error encoding kernel mem-ref for device %d",
 				ps_operation->session->device.fd);
 		ps_operation->enc_dec.enc_error_state = OTZ_ERROR_ENCODE_MEMORY;
 		ps_operation->s_errno = ret;
@@ -3598,7 +3598,7 @@ static otz_return_t otz_shared_memory_allocate(struct otz_session_t *ps_session,
 	struct otz_session_shared_mem_info mem_info;
 
 	if (ps_session == NULL || ps_shared_mem == NULL) {
-		TERR("shr_mem_allocate : Error Illegal argument\n");
+		pr_err("shr_mem_allocate : Error Illegal argument\n");
 		return OTZ_ERROR_ILLEGAL_ARGUMENT;
 	}
 
@@ -3607,7 +3607,7 @@ static otz_return_t otz_shared_memory_allocate(struct otz_session_t *ps_session,
 			(ps_shared_mem->ui_flags != OTZ_MEM_SERVICE_RO &&
 			 ps_shared_mem->ui_flags != OTZ_MEM_SERVICE_WO &&
 			 ps_shared_mem->ui_flags != OTZ_MEM_SERVICE_RW)) {
-		TERR("shr_mem_allocate : Error Illegal state\n");
+		pr_err("shr_mem_allocate : Error Illegal state\n");
 		return OTZ_ERROR_ILLEGAL_STATE;
 	}
 
@@ -3620,15 +3620,15 @@ static otz_return_t otz_shared_memory_allocate(struct otz_session_t *ps_session,
 	/* else if(ps_shared_mem->ui_flags ==  OTZ_MEM_SERVICE_RW) */
 		/* mmap_flags = PROT_READ | PROT_WRITE; */
 
-	OTZ_DBG("shared mem len %d", ps_shared_mem->ui_length);
-	OTZ_DBG("shared mem fd  %d", ps_session->device.fd);
+	pr_debug("shared mem len %d", ps_shared_mem->ui_length);
+	pr_debug("shared mem fd  %d", ps_session->device.fd);
 
 	/* TODO:Look at the flags */
 	ps_shared_mem->p_block = kernel_mmap(ps_session->device.fd,
 			ps_shared_mem->ui_length);
 
-	OTZ_DBG("return from kernel_mmap");
-	OTZ_DBG("mmap u_addr  %p", (uint32_t *)ps_shared_mem->p_block);
+	pr_debug("return from kernel_mmap");
+	pr_debug("mmap u_addr  %p", (uint32_t *)ps_shared_mem->p_block);
 
 	if (ps_shared_mem->p_block != NULL) {
 		mem_info.service_id = ps_session->service_id;
@@ -3637,7 +3637,7 @@ static otz_return_t otz_shared_memory_allocate(struct otz_session_t *ps_session,
 		ret = __otz_client_shared_mem_alloc(ps_session->device.fd,
 				&mem_info);
 	} else {
-		TERR("otz_shared_memory_allocate - kernel_mmap failed");
+		pr_err("otz_shared_memory_allocate - kernel_mmap failed");
 		ps_shared_mem->s_errno = ret;
 		ret = -1;
 	}
@@ -3652,7 +3652,7 @@ static otz_return_t otz_shared_memory_allocate(struct otz_session_t *ps_session,
 		ps_session->shared_mem_cnt++;
 		return OTZ_SUCCESS;
 	} else {
-		OTZ_DBG("shared_mem_allocation_failed");
+		pr_debug("shared_mem_allocation_failed");
 		ps_shared_mem->s_errno = ret;
 		ps_shared_mem->ui_state = OTZ_STATE_INVALID;
 		ps_shared_mem->ui_length = 0 ;
@@ -3712,27 +3712,27 @@ static int otz_client_init(void)
 	struct device *class_dev;
 	struct trustzone_chip *chip;
 
-	OTZ_DBG("OTZ_CLIENT_INIT_DEBUG");
+	pr_debug("OTZ_CLIENT_INIT_DEBUG");
 	otz_client_smc_init();
 
 	ret_code = alloc_chrdev_region(&otz_client_device_no, 0, 1,
 			OTZ_CLIENT_DEV);
 	if (ret_code < 0) {
-		TERR("alloc_chrdev_region failed %d", ret_code);
+		pr_err("alloc_chrdev_region failed %d", ret_code);
 		return ret_code;
 	}
 
 	driver_class = class_create(THIS_MODULE, OTZ_CLIENT_DEV);
 	if (IS_ERR(driver_class)) {
 		ret_code = -ENOMEM;
-		TERR("class_create failed %d", ret_code);
+		pr_err("class_create failed %d", ret_code);
 		goto unregister_chrdev_region;
 	}
 
 	class_dev = device_create(driver_class, NULL, otz_client_device_no,
 			NULL, OTZ_CLIENT_DEV);
 	if (!class_dev) {
-		TERR("class_device_create failed %d", ret_code);
+		pr_err("class_device_create failed %d", ret_code);
 		ret_code = -ENOMEM;
 		goto class_destroy;
 	}
@@ -3743,12 +3743,12 @@ static int otz_client_init(void)
 	ret_code = cdev_add(&otz_client_cdev,
 			MKDEV(MAJOR(otz_client_device_no), 0), 1);
 	if (ret_code < 0) {
-		TERR("cdev_add failed %d", ret_code);
+		pr_err("cdev_add failed %d", ret_code);
 		goto class_device_destroy;
 	}
 
 	/* Initialize structure for services and sessions*/
-	OTZ_DBG("Initializing list for servires\n");
+	pr_debug("Initializing list for servires\n");
 	memset(&otzc_dev_file_head, 0, sizeof(otzc_dev_file_head));
 	otzc_dev_file_head.dev_file_cnt = 0;
 	INIT_LIST_HEAD(&otzc_dev_file_head.dev_file_list);
@@ -3782,7 +3782,7 @@ unregister_chrdev_region:
 
 static void otz_client_exit(void)
 {
-	TDEBUG("otz_client exit");
+	pr_debug("otz_client exit");
 
 #ifdef OTZONE_ASYNC_NOTIFY_SUPPORT
 	unregister_secure_notify_handler();

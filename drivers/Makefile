@@ -150,4 +150,4 @@ obj-$(CONFIG_IPACK_BUS)		+= ipack/
 obj-y				+= xilinx_common/
 
 obj-$(CONFIG_PMODS)		+= pmods/
-obj-y$(CONFIG_SECURE_HARDWARE)	+= sechw/
+obj-$(CONFIG_SECURE_HARDWARE)	+= sechw/
