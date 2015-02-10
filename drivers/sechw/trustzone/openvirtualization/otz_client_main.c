@@ -53,7 +53,7 @@
 #include <asm/uaccess.h>
 #include <linux/buffer_head.h>
 #include <linux/trustzone.h>
-#include "trustzone.h"
+#include "../trustzone.h"
 #include "otz_client.h"
 #include "otz_api.h"
 #include "otz_common.h"

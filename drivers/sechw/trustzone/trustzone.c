@@ -1,9 +1,12 @@
 /*
- * Copyright (C) 2014 Javier González
+ * Copyright (C) 2014 Javier González <javier@javigon.com>
  *
  * Generic device driver for ARM TrustZone.
  *
- * TODO: All checkings
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  * TODO: Revise return values
  */
 
@@ -37,12 +40,12 @@ static struct trustzone_chip *tz_chip_find_get(u32 chip_num)
 	return chip;
 }
 
-int __tz_open(struct trustzone_chip *chip,
-		struct trustzone_session *session, u8 primitive)
+static int __tz_open(struct trustzone_chip *chip,
+		struct trustzone_session *session, u8 service_id)
 {
 	int ret = 0;
 
-	ret = chip->tz_ops.open(primitive, session);
+	ret = chip->tz_ops.open(service_id, session);
 	if (ret) {
 		dev_err(chip->dev, "Open session failed in TrustZone"
 				" chip (id:%d)\n", chip->dev_num);
@@ -53,10 +56,11 @@ int __tz_open(struct trustzone_chip *chip,
 	 * This problem occurs up too;
 	 * */
 	/* trustzone_chip_put(chip); */
+	dev_dbg(chip->dev, "TrustZone open session succeeded\n");
 	return ret;
 }
 
-int __tz_close(struct trustzone_chip *chip,
+static int __tz_close(struct trustzone_chip *chip,
 		struct trustzone_session *tz_session)
 {
 	int ret = 0;
@@ -68,12 +72,14 @@ int __tz_close(struct trustzone_chip *chip,
 		return ret;
 	}
 	/* TODO: Look at the trustzone_chip_put(chip) to see if it is
-	 * necessary to take the chip out of a list.
+	 * necessary to take the chip out of a list. As done in open
 	 */
+
+	dev_dbg(chip->dev, "TrustZone close session succeeded\n");
 	return ret;
 }
 
-static int __tz_transmit(struct trustzone_chip *chip,
+static int __tz_invoke(struct trustzone_chip *chip,
 		struct trustzone_session *session, struct trustzone_cmd *cmd,
 		struct trustzone_parameter_list *params)
 {
@@ -83,21 +89,34 @@ static int __tz_transmit(struct trustzone_chip *chip,
 	if (ret) {
 		dev_err(chip->dev, "Transmit command failed in TrustZone chip"
 				" (id:%d)\n", chip->dev_num);
-		goto out;
+		return ret;
 	}
-	dev_dbg(chip->dev, "Transmit command succeeded\n");
+	dev_dbg(chip->dev, "TrustZone transmit command succeeded\n");
 
-out:
 	return ret;
 }
 
-
 /**
- * TrustZone Generic Operations
+ * tz_open() - open a TEE session
+ * @chip_num: TrustZone chip idenfier. If wanting default use TRUSTZONE_ANY_NUM
+ * @session: TEE session. It is passed allocated and returned filled by the TEE.
+ * TEE clients do not need the session, but they need to keep it to invoke
+ * commands and close the session, so that the TEE can identify it.
+ * @service_id: service to be opened by the session. Services accept then
+ * commands that they can interpret.
+ *
+ * Open a TEE session. The TEE tries to to open a new session and allocates
+ * resources in the TEE for it. Sessions are opened for a given, known trusted
+ * service. Known trusted services for kernel submodules are in tz_services.
+ * If the session is opened succesfully, a session is return to the TEE client.
+ *
+ * Locks are maintained by this function when communicating with the TEE. See
+ * __tz_open() for a function that does not maintain locks.
+ *
+ * Return: return codes defined in TODO: Look common errors in OTZ and OP-TEE
  */
-
 int tz_open(u32 chip_num, struct trustzone_session *session,
-		u8 primitive)
+		u8 service_id)
 {
 	struct trustzone_chip *chip;
 	int ret = 0;
@@ -109,13 +128,25 @@ int tz_open(u32 chip_num, struct trustzone_session *session,
 		return -ENODEV;
 	}
 	mutex_lock(&chip->tz_mutex);
-	ret = __tz_open(chip, session, primitive);
+	ret = __tz_open(chip, session, service_id);
 	mutex_unlock(&chip->tz_mutex);
 
 	return ret;
 }
 EXPORT_SYMBOL_GPL(tz_open);
 
+/**
+ * tz_close() - close a TEE session
+ * @chip_num: TrustZone chip idenfier. If wanting default use TRUSTZONE_ANY_NUM
+ * @session: Filled TEE session.
+ *
+ * Close a TEE session.
+ *
+ * Locks are maintained by this function when communicating with the TEE. See
+ * __tz_close() for a function that does not maintain locks.
+ *
+ * Return: TODO
+ */
 int tz_close(u32 chip_num, struct trustzone_session *tz_session)
 {
 	struct trustzone_chip *chip;
@@ -130,20 +161,77 @@ int tz_close(u32 chip_num, struct trustzone_session *tz_session)
 	mutex_lock(&chip->tz_mutex);
 	ret = __tz_close(chip, tz_session);
 	mutex_unlock(&chip->tz_mutex);
-
+	
 	return ret;
 }
 EXPORT_SYMBOL_GPL(tz_close);
 
-
-/* XXX: Maybe we should have a general mapping of sessions where each session
- * has a general ID independently from the chip. This is future work.
+/**
+ * tz_invoke() - invoke a TEE command
+ * @chip_num: TrustZone chip idenfier. If wanting default use TRUSTZONE_ANY_NUM
+ * @session: filled TEE session.
+ * @cmd: TEE command that is interpreted by the TEE service that opened the
+ * session.
+ * @params: list of parameters to be sent together with the command.
+ *
+ * Invoke a TEE command. Commands are supposed to be interpreted by the TEE
+ * service that opened the session. It is the client TEE's responsability to
+ * known the commands that are supported by the TEE service.
+ *
+ * There are no restrictions regarding number of  parameters, and can contain as
+ * many parameters as wanted (or supported by each specific TEE framework).
+ *
+ * Locks are maintained by this function when communicating with the TEE. See
+ * __tz_invoke() for a function that does not maintain locks.
+ *
+ * Return: TODO
  */
-int tz_transmit(u32 chip_num, struct trustzone_session *session,
+int tz_invoke(u32 chip_num, struct trustzone_session *session,
 		struct trustzone_cmd *cmd,
 		struct trustzone_parameter_list *params)
 {
 	struct trustzone_chip *chip;
+	int ret = 0;
+
+	chip = tz_chip_find_get(chip_num);
+	if (chip == NULL) {
+		dev_err(chip->dev, "Could not find TrustZone chip (id:%d)"
+				" registered\n", chip_num);
+		return -ENODEV;
+	}
+	mutex_lock(&chip->tz_mutex);
+	ret = __tz_invoke(chip, session, cmd, params);
+	mutex_unlock(&chip->tz_mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(tz_invoke);
+
+/**
+ * tz_atomic_operation() - send a command atomically to the TEE
+ * @chip_num: TrustZone chip idenfier. If wanting default use TRUSTZONE_ANY_NUM
+ * @service_id: service to be opened by the session. Services accept then
+ * commands that they can interpret.
+ * @cmd: TEE command that is interpreted by the TEE service that opened the
+ * session.
+ * @params: list of parameters to be sent together with the command.
+ *
+ * Performing an atomic operation entails opening a TEE session to a service,
+ * sending a single command to the TEE, and closing the TEE session. No session
+ * has then to be maintained by the TEE client.
+ *
+ * This operation is recommended when sending a single task to the TEE. For
+ * sending a series of tasks is better to explicetly opening and closing a
+ * session, sending the desired tasks to the TEE in the middle.
+ *
+ * Return: TODO:
+ */
+int tz_atomic_operation(u32 chip_num, u8 service_id,
+		struct trustzone_cmd *cmd,
+		struct trustzone_parameter_list *params)
+{
+	struct trustzone_chip *chip;
+	struct trustzone_session session;
 	int ret = 0;
 
 	chip = tz_chip_find_get(chip_num);
@@ -153,99 +241,23 @@ int tz_transmit(u32 chip_num, struct trustzone_session *session,
 		ret = -ENODEV;
 		goto out;
 	}
+
 	mutex_lock(&chip->tz_mutex);
-	ret = __tz_transmit(chip, session, cmd, params);
-	mutex_unlock(&chip->tz_mutex);
-	dev_dbg(chip->dev, "Transmit command succeeded\n");
-
-out:
-	return ret;
-}
-EXPORT_SYMBOL_GPL(tz_transmit);
-
-/*
- * Perform an operation in the TEE.
- *
- * Performing an operation entails opening a TEE session, sending a single task
- * and closing the TEE session.
- *
- * This operation is recommended when sending a single task to the TEE. For
- * sending a series of tasks is better to explicetly opening and closing a
- * session, sending the desired tasks to the TEE in the middle
- */
-int tz_send_operation(u32 chip_num, struct trustzone_session *session,
-		struct trustzone_cmd *cmd,
-		struct trustzone_parameter_list *params)
-{
-	return tz_transmit(chip_num, session, cmd, params);
-}
-
-/**
-  * TODO: Are these operations necessary? We can either maintain a wimple
-  * read/write interface and delegate the behaviour to the commands sent to the
-  * secure world, or provide a richer interface for common operations (e.g.,
-  * allocate shared memory
-  */
-#if 0
-int tz_shared_memory_allocate(void)
-{
-	return 0;
-}
-
-int tz_shared_memory_register(void)
-{
-	return 0;
-}
-
-int tz_shared_memory_free(void)
-{
-	return 0;
-}
-#endif
-
-/*
- *TODO: Secure system primitives should probably be located in a sepparate file.
- */
-int tz_monitor_syscall(u32 chip_num, struct trustzone_session *tz_session,
-		unsigned long sig, siginfo_t *sig_info)
-{
-	struct trustzone_cmd cmd;
-	struct trustzone_session my_tz_session;
-	struct trustzone_chip *chip;
-	int ret = 0;
-
-	cmd.cmd = TZ_SYSCALL_MONITOR;
-	chip = tz_chip_find_get(chip_num);
-	if (chip == NULL) {
-		dev_err(chip->dev, "Could not find TrustZone chip (id:%d)"
-				" registered\n", chip_num);
-		return -ENODEV;
-	}
-	mutex_lock(&chip->tz_mutex);
-	ret = __tz_open(chip, &my_tz_session,
-		TZ_SECURE_PRIMITIVE_SVC);
-
-	if (ret) {
-		dev_err(chip->dev, "Open session failed for TZ_SYSCALL_MONITOR");
-		return ret;
-	}
-	ret = __tz_transmit(chip, &my_tz_session, &cmd, NULL);
-
-	if (ret) {
-		dev_err(chip->dev, "Send TZ_SYSCALL_MONITOR to SW failed\n");
+	ret = __tz_open(chip, &session, service_id);
+	if (ret)
 		goto out;
-	}
-	ret = __tz_close(chip, &my_tz_session);
 
-	if (ret) {
-		dev_err(chip->dev, "Close session failed during test\n");
-		return ret;
-	}
-	mutex_unlock(&chip->tz_mutex);
+	ret = __tz_invoke(chip, &session, cmd, params);
+	if (ret)
+		goto out_close;
 
+out_close:
+	ret = __tz_close(chip, &session);
 out:
+	mutex_unlock(&chip->tz_mutex);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(tz_atomic_operation);
 
 /*
  * If the vendor provides a release function, call it too
@@ -263,17 +275,15 @@ void trustzone_vendor_release(struct trustzone_chip *chip)
 
 static void trustzone_dev_release(struct device *dev)
 {
-	/* FIXME: You need to fix all this crap... */
-	/* struct trustzone_chip *chip = dev_get_drvdata(dev); */
-	/* struct trustzone_chip *chip; */
+	struct trustzone_chip *chip = dev_get_drvdata(dev);
 
-	/* if (!chip) */
-		/* return; */
+	if (!chip)
+		return;
 
-	/* trustzone_vendor_release(chip); */
+	trustzone_vendor_release(chip);
 
-	/* chip->release(dev); */
-	/* kfree(chip); */
+	chip->release(dev);
+	kfree(chip);
 }
 EXPORT_SYMBOL_GPL(trustzone_dev_release);
 
@@ -317,8 +327,8 @@ struct trustzone_chip *trustzone_register_hardware(struct device *dev,
 				chip->tz_ops.miscdev.minor);
 		goto put_device;
 	}
+
 	/* TODO: Add sysfs interface
-	 * TODO: Add debugfs interface
 	if (sysfs_create_group(&dev->kobj, chip->tz_ops.attr_group)) {
 		misc_deregister(&chip->tz_ops.miscdev);
 		goto put_device;
@@ -343,7 +353,7 @@ out_free:
 }
 EXPORT_SYMBOL_GPL(trustzone_register_hardware);
 
-MODULE_AUTHOR("Javier González (jgon@itu.dk)");
+MODULE_AUTHOR("Javier González (javier@javigon.com)");
 MODULE_DESCRIPTION("TrustZone Generic Driver");
 MODULE_VERSION("1.0");
 MODULE_LICENSE("GPL");
