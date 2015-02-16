@@ -262,7 +262,7 @@ EXPORT_SYMBOL_GPL(tz_atomic_operation);
 /*
  * If the vendor provides a release function, call it too
  */
-void trustzone_vendor_release(struct trustzone_chip *chip)
+static void trustzone_vendor_release(struct trustzone_chip *chip)
 {
 	if (!chip)
 		return;
